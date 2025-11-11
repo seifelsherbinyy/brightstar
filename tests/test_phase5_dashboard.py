@@ -239,6 +239,12 @@ def _create_inputs(tmp_path: Path) -> None:
                 "forecast_week": "2025-09-15",
                 "forecast_value": 115.0,
                 "potential_gain": 12.0,
+                "forecast_horizon_weeks": 12,
+                "Forecast_Risk_Flag": 4,
+                "risk_gain_flag": "high_performing",
+                "delta_value": 5.0,
+                "delta_pct": 0.05,
+                "week_offset": 12,
             },
             {
                 "entity_type": "vendor",
@@ -248,6 +254,12 @@ def _create_inputs(tmp_path: Path) -> None:
                 "forecast_week": "2025-09-15",
                 "forecast_value": 85.0,
                 "potential_gain": 6.0,
+                "forecast_horizon_weeks": 12,
+                "Forecast_Risk_Flag": 1,
+                "risk_gain_flag": "at_risk",
+                "delta_value": -3.0,
+                "delta_pct": -0.035,
+                "week_offset": 12,
             },
         ]
     )
@@ -263,6 +275,12 @@ def _create_inputs(tmp_path: Path) -> None:
                 "forecast_week": "2025-09-15",
                 "forecast_value": 116.0,
                 "potential_gain": 11.0,
+                "forecast_horizon_weeks": 12,
+                "Forecast_Risk_Flag": 3,
+                "risk_gain_flag": "growing",
+                "delta_value": 6.0,
+                "delta_pct": 0.055,
+                "week_offset": 12,
             },
         ]
     )
@@ -284,10 +302,15 @@ def test_dashboard_generation_creates_expected_sheets(tmp_path: Path) -> None:
     headers = [cell.value for cell in vendor_sheet[1]]
     assert "Commentary_Insight" in headers
     assert "Forecast_Potential_Gain" in headers
+    assert "Forecast_Risk_Label" in headers
     comment_col = headers.index("Commentary_Insight") + 1
     forecast_col = headers.index("Forecast_Potential_Gain") + 1
+    risk_label_col = headers.index("Forecast_Risk_Label") + 1
+    risk_flag_col = headers.index("Forecast_Risk_Flag") + 1
     assert vendor_sheet.cell(row=2, column=comment_col).value == "V1 grew GMS by 10% WoW."
     assert vendor_sheet.cell(row=2, column=forecast_col).value == 12.0
+    assert vendor_sheet.cell(row=2, column=risk_label_col).value == "high_performing"
+    assert vendor_sheet.cell(row=2, column=risk_flag_col).value == 4
     assert len(vendor_sheet.conditional_formatting) > 0
     header_font = vendor_sheet.cell(row=1, column=1).font
     assert header_font.bold

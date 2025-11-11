@@ -36,6 +36,22 @@ ingestion:
   id_columns:
     - Vendor
     - ASIN
+  column_aliases:
+    vendor:
+      - Vendor
+      - Vendor Code
+      - Vendor_ID
+      - vendor
+      - vendor code
+      - VendorCode
+    asin:
+      - ASIN
+      - asin
+      - A S I N
+      - a s i n
+      - Asin
+      - ASIN#
+      - Product ASIN
   value_round: 4
   deduplicate: true
   force_long_format: false
@@ -61,6 +77,19 @@ scoring:
   aggregation: mean
   fallback_normalized_value: 0.5
   composite_scale: 1000
+  metrics:
+    - name: GMS($)
+      weight: 0.4
+      direction: up
+    - name: FillRate(%)
+      weight: 0.3
+      direction: up
+    - name: SoROOS(%)
+      weight: 0.2
+      direction: down
+    - name: ASP($)
+      weight: 0.1
+      direction: up
   thresholds:
     excellent: 850
     good: 700
@@ -122,7 +151,11 @@ commentary:
 forecasting:
   normalized_input: data/processed/normalized_phase1.parquet
   output_dir: data/processed/forecasts
-  horizon_weeks: 4
+  horizons_weeks:
+    - 4
+    - 6
+    - 12
+  accuracy_backtest_weeks: 4
   min_history_weeks: 3
   frequency: W-MON
   metrics:
@@ -140,6 +173,10 @@ forecasting:
     SoROOS(%): down
     ASP($): up
   uncertainty_buffer_pct: 0.15
+  risk_gain_thresholds:
+    gain_pct: 0.05
+    risk_pct: -0.05
+    gain_absolute: 0.0
   metadata_fields:
     include_history: true
     include_methods: true

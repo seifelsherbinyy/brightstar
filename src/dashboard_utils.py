@@ -183,22 +183,58 @@ def _latest_commentary(commentary: pd.DataFrame, entity_type: str) -> pd.DataFra
 
 def _forecast_potential(forecasts: pd.DataFrame, entity_type: str) -> pd.DataFrame:
     if forecasts.empty:
-        cols = ["vendor_code", "asin", "metric", "potential_gain"]
+        cols = [
+            "vendor_code",
+            "asin",
+            "metric",
+            "potential_gain",
+            "forecast_horizon_weeks",
+            "Forecast_Risk_Flag",
+            "risk_gain_flag",
+            "delta_value",
+            "delta_pct",
+        ]
         return pd.DataFrame(columns=cols)
 
     filtered = forecasts[forecasts["entity_type"].str.lower() == entity_type.lower()].copy()
     if filtered.empty:
-        return pd.DataFrame(columns=["vendor_code", "asin", "metric", "potential_gain"])
+        return pd.DataFrame(
+            columns=[
+                "vendor_code",
+                "asin",
+                "metric",
+                "potential_gain",
+                "forecast_horizon_weeks",
+                "Forecast_Risk_Flag",
+                "risk_gain_flag",
+                "delta_value",
+                "delta_pct",
+            ]
+        )
 
     group_keys: List[str] = ["vendor_code", "metric"]
     if entity_type != "vendor":
         group_keys.insert(1, "asin")
 
-    aggregated = filtered.groupby(group_keys, as_index=False)["potential_gain"].max()
+    filtered = filtered.sort_values(
+        ["forecast_horizon_weeks", "potential_gain"],
+        ascending=[False, False],
+    )
+    aggregated = filtered.groupby(group_keys, as_index=False).first()
 
     if entity_type == "vendor":
         aggregated["asin"] = None
-    return aggregated
+    return aggregated[
+        group_keys
+        + [
+            "potential_gain",
+            "forecast_horizon_weeks",
+            "Forecast_Risk_Flag",
+            "risk_gain_flag",
+            "delta_value",
+            "delta_pct",
+        ]
+    ]
 
 
 def _enrich_scorecard(
@@ -248,6 +284,18 @@ def _enrich_scorecard(
         enriched.rename(columns={"potential_gain": "Forecast_Potential_Gain"}, inplace=True)
     else:
         enriched["Forecast_Potential_Gain"] = pd.NA
+
+    rename_map = {
+        "forecast_horizon_weeks": "Forecast_Horizon_Weeks",
+        "risk_gain_flag": "Forecast_Risk_Label",
+        "delta_value": "Forecast_Delta_Value",
+        "delta_pct": "Forecast_Delta_Pct",
+    }
+    enriched.rename(columns=rename_map, inplace=True)
+
+    for column in ["Forecast_Horizon_Weeks", "Forecast_Risk_Flag", "Forecast_Risk_Label", "Forecast_Delta_Value", "Forecast_Delta_Pct"]:
+        if column not in enriched.columns:
+            enriched[column] = pd.NA
 
     return enriched
 

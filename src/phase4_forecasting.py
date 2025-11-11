@@ -50,7 +50,7 @@ def run_phase4(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
     timestamp = datetime.now(timezone.utc).isoformat()
     metadata: Dict[str, object] = {
         "timestamp": timestamp,
-        "horizon_weeks": context.horizon,
+        "horizons_weeks": list(context.horizons),
         "records_vendor": int(len(vendor_forecasts)),
         "records_asin": int(len(asin_forecasts)),
         "metrics": list(context.metrics),

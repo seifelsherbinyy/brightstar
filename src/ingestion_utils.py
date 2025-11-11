@@ -282,6 +282,34 @@ def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def detect_identifier_column(
+    df: pd.DataFrame,
+    aliases: Iterable[str],
+    fallback_index: Optional[int] = None,
+    default_name: Optional[str] = None,
+) -> Tuple[pd.DataFrame, Optional[str]]:
+    """Detect a column by alias and optionally create it when missing."""
+
+    alias_tokens = [_normalize_header_token(alias) for alias in aliases]
+    normalized_map = {_normalize_header_token(col): col for col in df.columns}
+
+    for token in alias_tokens:
+        if token and token in normalized_map:
+            return df, normalized_map[token]
+
+    if fallback_index is not None:
+        columns = list(df.columns)
+        if -len(columns) <= fallback_index < len(columns):
+            return df, columns[fallback_index]
+
+    if default_name and default_name not in df.columns:
+        df = df.copy()
+        df[default_name] = pd.NA
+        return df, default_name
+
+    return df, default_name if default_name in df.columns else None
+
+
 def detect_structure(df: pd.DataFrame, id_columns: Iterable[str]) -> str:
     """Detect whether the dataset is wide or long format."""
 

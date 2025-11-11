@@ -120,6 +120,10 @@ def test_scoring_generates_ranked_scorecards(tmp_path):
     assert ranks.loc["V1", "Rank_Overall"] == 1
     assert ranks.loc["V2", "Rank_Overall"] == ranks["Rank_Overall"].max()
 
+    assert "Improvement_Rank" in vendor_df.columns
+    improvement = vendor_df[vendor_df["metric"] == "GMS($)"]
+    assert improvement["Improvement_Rank"].notna().all()
+
     gms_ranks = (
         vendor_df[vendor_df["metric"] == "GMS($)"]
         .set_index("vendor_code")["Rank_By_Metric"]
