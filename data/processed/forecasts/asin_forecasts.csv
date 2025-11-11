@@ -1,0 +1,9 @@
+entity_type,vendor_code,asin,metric,forecast_week,forecast_value,lower_bound,upper_bound,last_observed_week,last_observed_value,potential_gain,history_weeks,methods,status
+asin,V1,A1,GMS($),2025-09-15,120.0,97.0,143.0,2025-09-08,110.0,10.0,2,fallback,"fallback,insufficient_history"
+asin,V1,A1,GMS($),2025-09-22,130.0,105.5,154.5,2025-09-08,110.0,20.0,2,fallback,"fallback,insufficient_history"
+asin,V1,A1,GMS($),2025-09-29,140.0,114.0,166.0,2025-09-08,110.0,30.0,2,fallback,"fallback,insufficient_history"
+asin,V1,A1,GMS($),2025-10-06,150.0,122.5,177.5,2025-09-08,110.0,40.0,2,fallback,"fallback,insufficient_history"
+asin,V2,A2,GMS($),2025-09-15,220.0,182.0,258.0,2025-09-08,210.0,10.0,2,fallback,"fallback,insufficient_history"
+asin,V2,A2,GMS($),2025-09-22,230.0,190.5,269.5,2025-09-08,210.0,20.0,2,fallback,"fallback,insufficient_history"
+asin,V2,A2,GMS($),2025-09-29,240.0,199.0,281.0,2025-09-08,210.0,30.0,2,fallback,"fallback,insufficient_history"
+asin,V2,A2,GMS($),2025-10-06,250.0,207.5,292.5,2025-09-08,210.0,40.0,2,fallback,"fallback,insufficient_history"
