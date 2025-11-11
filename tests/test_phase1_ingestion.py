@@ -1,8 +1,10 @@
 import json
+import json
 import sys
 from pathlib import Path
 from textwrap import dedent
 
+import pandas as pd
 import yaml
 
 
@@ -29,6 +31,13 @@ def build_config(tmp_path: Path) -> Path:
         "09/08/2025-09/14/2025,2025W37,2025-09-08,2025-09-14\n"
     )
 
+    master_path = reference_dir / "Masterfile.xlsx"
+    pd.DataFrame(
+        [
+            {"ASIN": "A1", "Vendor Code": "V_MASTER", "Vendor Name": "Vendor One"},
+        ]
+    ).to_excel(master_path, index=False, sheet_name="Master")
+
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         dedent(
@@ -40,6 +49,7 @@ def build_config(tmp_path: Path) -> Path:
               calendar_map: {calendar_map}
               normalized_output: {processed_dir}/normalized.parquet
               ingestion_state: {processed_dir}/state.json
+              masterfile: {master_path}
             logging:
               level: INFO
               file_name: phase1.log
@@ -54,6 +64,12 @@ def build_config(tmp_path: Path) -> Path:
               allowed_extensions:
                 - .csv
               output_format: csv
+            masterfile:
+              sheet_name: Master
+              columns:
+                asin: ASIN
+                vendor_code: Vendor Code
+                vendor_name: Vendor Name
             summary:
               enabled: true
               template: "Processed {{total_rows}} rows across {{unique_weeks}} weeks. Last week: {{last_week}}."
@@ -66,9 +82,9 @@ def build_config(tmp_path: Path) -> Path:
 
 def create_sample_raw(raw_path: Path) -> Path:
     content = (
-        "Vendor,ASIN,GMS($)(09/01/2025-09/07/2025),GMS($)(09/08/2025-09/14/2025)\n"
-        "V1,A1,100,110\n"
-        "V1,A1,100,110\n"
+        "Vendor,A S I N,GMS($) 09/01/2025-09/07/2025,GMS($) 09/08/2025-09/14/2025,Fill Rate (%) W36 2026,Revenue(09/22/2026-09/28/2026)\n"
+        ",A1,100,110,0.95,120\n"
+        ",A1,100,110,0.95,120\n"
     )
     file_path = raw_path / "sample.csv"
     file_path.write_text(content)
@@ -86,14 +102,22 @@ def test_run_phase1_normalizes_weeks(tmp_path, capsys):
     captured = capsys.readouterr().out
     assert "Processed" in captured
     assert not df.empty
-    assert set(df["week_label"]) == {"2025W36", "2025W37"}
-    assert df["value"].tolist() == [100.0, 110.0]
+    assert "vendor_name" in df.columns
+    assert set(df["vendor_name"].dropna()) == {"Vendor One"}
+    assert set(df["vendor_code"].dropna()) == {"V_MASTER"}
+    assert set(df["week_label"]) == {"2025W36", "2025W37", "2026W36", "2026W39"}
+    fill_rate_row = df[df["metric"] == "Fill Rate (%)"].iloc[0]
+    assert fill_rate_row["week_label"] == "2026W36"
+    assert fill_rate_row["week_start"] == "2026-08-31"
+    range_row = df[df["metric"] == "Revenue"].iloc[0]
+    assert range_row["week_label"] == "2026W39"
+    assert range_row["week_start"] == "2026-09-21"
     assert (tmp_path / "logs" / "phase1.log").exists()
     state_path = tmp_path / "data" / "processed" / "state.json"
     assert state_path.exists()
     state = json.loads(state_path.read_text())
-    assert state["records"] == 2
-    assert state["last_week"] == "2025W37"
+    assert state["records"] == 4
+    assert state["last_week"] == "2026W39"
 
 
 def test_deduplication(tmp_path):
@@ -104,5 +128,5 @@ def test_deduplication(tmp_path):
 
     df = run_phase1(config_path=str(config_path))
 
-    assert len(df) == 2
-    assert df.drop_duplicates(subset=["week_label"]).shape[0] == 2
+    assert len(df) == 4
+    assert df.drop_duplicates(subset=["week_label"]).shape[0] == 4

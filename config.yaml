@@ -3,6 +3,7 @@ paths:
   processed_dir: data/processed
   logs_dir: logs
   calendar_map: data/reference/calendar_map.csv
+  masterfile: data/reference/Masterfile.xlsx
   normalized_output: data/processed/normalized_phase1.parquet
   ingestion_state: data/processed/ingestion_state.json
   scorecards_dir: data/processed/scorecards
@@ -35,6 +36,22 @@ ingestion:
   id_columns:
     - Vendor
     - ASIN
+  column_aliases:
+    vendor:
+      - Vendor
+      - Vendor Code
+      - Vendor_ID
+      - vendor
+      - vendor code
+      - VendorCode
+    asin:
+      - ASIN
+      - asin
+      - A S I N
+      - a s i n
+      - Asin
+      - ASIN#
+      - Product ASIN
   value_round: 4
   deduplicate: true
   force_long_format: false
@@ -49,11 +66,30 @@ calendar_mapping:
 summary:
   enabled: true
   template: "Processed {total_rows} rows across {unique_weeks} weeks. Last week: {last_week}."
+masterfile:
+  sheet_name: Master
+  columns:
+    asin: ASIN
+    vendor_code: Vendor Code
+    vendor_name: Vendor Name
 scoring:
   normalized_input: data/processed/normalized_phase1.parquet
   aggregation: mean
   fallback_normalized_value: 0.5
   composite_scale: 1000
+  metrics:
+    - name: GMS($)
+      weight: 0.4
+      direction: up
+    - name: FillRate(%)
+      weight: 0.3
+      direction: up
+    - name: SoROOS(%)
+      weight: 0.2
+      direction: down
+    - name: ASP($)
+      weight: 0.1
+      direction: up
   thresholds:
     excellent: 850
     good: 700
@@ -115,7 +151,11 @@ commentary:
 forecasting:
   normalized_input: data/processed/normalized_phase1.parquet
   output_dir: data/processed/forecasts
-  horizon_weeks: 4
+  horizons_weeks:
+    - 4
+    - 6
+    - 12
+  accuracy_backtest_weeks: 4
   min_history_weeks: 3
   frequency: W-MON
   metrics:
@@ -133,6 +173,10 @@ forecasting:
     SoROOS(%): down
     ASP($): up
   uncertainty_buffer_pct: 0.15
+  risk_gain_thresholds:
+    gain_pct: 0.05
+    risk_pct: -0.05
+    gain_absolute: 0.0
   metadata_fields:
     include_history: true
     include_methods: true
@@ -155,7 +199,18 @@ dashboard:
     header_fill: "1F4E78"
     header_font_color: "FFFFFF"
     body_font: Calibri
+    header_font_size: 12
+    body_font_size: 11
     precision: 2
+    body_alignment:
+      horizontal: left
+      vertical: center
+      wrap_text: true
+    row_height: 20
+    header_row_height: 24
+    borders:
+      style: thin
+      color: D9D9D9
     column_widths:
       default: 18
       overrides:
@@ -169,6 +224,39 @@ dashboard:
       end_color: "63BE7B"
       mid_value: 700
       end_value: 950
+    icon_sets:
+      - column: Composite_Score
+        style: 5Quarters
+        type: num
+        values:
+          - 0
+          - 550
+          - 700
+          - 850
+          - 950
+      - column: Forecast_Potential_Gain
+        style: 5ArrowsGray
+        type: num
+        values:
+          - -10
+          - 0
+          - 5
+          - 10
+          - 20
+      - column: Forecast_Risk_Flag
+        style: 5Rating
+        type: num
+        icons_only: true
+        values:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+        values:
+          - 0
+          - 5
+          - 10
     improvement_fills:
       Critical: "FFC7CE"
       Watch: "FFEB9C"

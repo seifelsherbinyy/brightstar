@@ -32,14 +32,21 @@ def test_phase4_generates_forecasts(forecasting_results: Dict[str, pd.DataFrame]
         "potential_gain",
         "methods",
         "status",
+        "forecast_horizon_weeks",
+        "delta_value",
+        "delta_pct",
+        "risk_gain_flag",
+        "Forecast_Risk_Flag",
+        "week_offset",
     }
     assert required_columns.issubset(vendor.columns)
     assert required_columns.issubset(asin.columns)
+    assert vendor["Forecast_Risk_Flag"].dropna().between(0, 4).all()
 
 
 def test_phase4_metadata_written(tmp_path: Path, forecasting_results: Dict[str, pd.DataFrame]) -> None:
     metadata = load_metadata("config.yaml")
-    assert metadata.get("horizon_weeks") == 4
+    assert metadata.get("horizons_weeks") == [4, 6, 12]
     assert metadata.get("records_vendor", 0) >= len(forecasting_results["vendor"])
     assert "timestamp" in metadata
     assert "methods_used" in metadata and "fallback" in metadata["methods_used"]

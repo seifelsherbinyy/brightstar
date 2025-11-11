@@ -95,15 +95,27 @@ def build_metric_map(config: Dict) -> Dict[str, MetricConfig]:
     """Construct the metric configuration mapping from settings."""
 
     scoring_config = config.get("scoring", {})
-    weights = scoring_config.get("metric_weights", {})
-    directions = scoring_config.get("metric_directions", {})
-    if not weights:
-        raise ValueError("No metric weights configured for scoring.")
+    metric_map: Dict[str, MetricConfig] = {}
 
-    metric_map = {}
-    for name, weight in weights.items():
-        direction = directions.get(name, "up")
-        metric_map[name] = MetricConfig(name=name, weight=float(weight), direction=str(direction))
+    configured_metrics = scoring_config.get("metrics") or []
+    for entry in configured_metrics:
+        name = entry.get("name")
+        if not name:
+            continue
+        weight = float(entry.get("weight", 0.0))
+        direction = entry.get("direction", scoring_config.get("metric_directions", {}).get(name, "up"))
+        metric_map[str(name)] = MetricConfig(name=str(name), weight=weight, direction=str(direction))
+
+    if not metric_map:
+        weights = scoring_config.get("metric_weights", {})
+        directions = scoring_config.get("metric_directions", {})
+        if not weights:
+            raise ValueError("No metric weights configured for scoring.")
+
+        for name, weight in weights.items():
+            direction = directions.get(name, "up")
+            metric_map[name] = MetricConfig(name=name, weight=float(weight), direction=str(direction))
+
     return metric_map
 
 
@@ -329,6 +341,26 @@ def add_rankings(scored: pd.DataFrame, entity_columns: Iterable[str]) -> pd.Data
         )
     else:
         scored["Rank_By_Category"] = pd.NA
+
+    improvement_unique = scored.drop_duplicates(subset=entity_cols + ["metric"]).copy()
+
+    def improvement_score(row: pd.Series) -> Optional[float]:
+        normalized_value = row.get("Normalized_Value")
+        if pd.isna(normalized_value):
+            return None
+        return float(max(0.0, min(1.0, 1.0 - float(normalized_value))))
+
+    improvement_unique["Improvement_Score"] = improvement_unique.apply(improvement_score, axis=1)
+    improvement_unique["Improvement_Rank"] = improvement_unique.groupby([entity_type_col])["Improvement_Score"].rank(
+        ascending=False,
+        method="dense",
+    )
+
+    scored = scored.merge(
+        improvement_unique[entity_cols + ["metric", "Improvement_Score", "Improvement_Rank"]],
+        on=entity_cols + ["metric"],
+        how="left",
+    )
 
     return scored
 

@@ -9,8 +9,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.formatting.rule import ColorScaleRule
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.formatting.rule import ColorScaleRule, IconSetRule
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .ingestion_utils import ensure_directory, load_config
@@ -183,22 +183,58 @@ def _latest_commentary(commentary: pd.DataFrame, entity_type: str) -> pd.DataFra
 
 def _forecast_potential(forecasts: pd.DataFrame, entity_type: str) -> pd.DataFrame:
     if forecasts.empty:
-        cols = ["vendor_code", "asin", "metric", "potential_gain"]
+        cols = [
+            "vendor_code",
+            "asin",
+            "metric",
+            "potential_gain",
+            "forecast_horizon_weeks",
+            "Forecast_Risk_Flag",
+            "risk_gain_flag",
+            "delta_value",
+            "delta_pct",
+        ]
         return pd.DataFrame(columns=cols)
 
     filtered = forecasts[forecasts["entity_type"].str.lower() == entity_type.lower()].copy()
     if filtered.empty:
-        return pd.DataFrame(columns=["vendor_code", "asin", "metric", "potential_gain"])
+        return pd.DataFrame(
+            columns=[
+                "vendor_code",
+                "asin",
+                "metric",
+                "potential_gain",
+                "forecast_horizon_weeks",
+                "Forecast_Risk_Flag",
+                "risk_gain_flag",
+                "delta_value",
+                "delta_pct",
+            ]
+        )
 
     group_keys: List[str] = ["vendor_code", "metric"]
     if entity_type != "vendor":
         group_keys.insert(1, "asin")
 
-    aggregated = filtered.groupby(group_keys, as_index=False)["potential_gain"].max()
+    filtered = filtered.sort_values(
+        ["forecast_horizon_weeks", "potential_gain"],
+        ascending=[False, False],
+    )
+    aggregated = filtered.groupby(group_keys, as_index=False).first()
 
     if entity_type == "vendor":
         aggregated["asin"] = None
-    return aggregated
+    return aggregated[
+        group_keys
+        + [
+            "potential_gain",
+            "forecast_horizon_weeks",
+            "Forecast_Risk_Flag",
+            "risk_gain_flag",
+            "delta_value",
+            "delta_pct",
+        ]
+    ]
 
 
 def _enrich_scorecard(
@@ -249,6 +285,18 @@ def _enrich_scorecard(
     else:
         enriched["Forecast_Potential_Gain"] = pd.NA
 
+    rename_map = {
+        "forecast_horizon_weeks": "Forecast_Horizon_Weeks",
+        "risk_gain_flag": "Forecast_Risk_Label",
+        "delta_value": "Forecast_Delta_Value",
+        "delta_pct": "Forecast_Delta_Pct",
+    }
+    enriched.rename(columns=rename_map, inplace=True)
+
+    for column in ["Forecast_Horizon_Weeks", "Forecast_Risk_Flag", "Forecast_Risk_Label", "Forecast_Delta_Value", "Forecast_Delta_Pct"]:
+        if column not in enriched.columns:
+            enriched[column] = pd.NA
+
     return enriched
 
 
@@ -258,11 +306,22 @@ def _apply_header_style(ws, formatting: Dict) -> None:
         color=formatting.get("header_font_color", "FFFFFF"),
         bold=True,
         name=formatting.get("body_font", "Calibri"),
+        size=float(formatting.get("header_font_size", 12)),
     )
+    border_style = formatting.get("borders", {}).get("style", "thin")
+    border_color = formatting.get("borders", {}).get("color", "D9D9D9")
+    header_border = Border(
+        left=Side(style=border_style, color=border_color),
+        right=Side(style=border_style, color=border_color),
+        top=Side(style=border_style, color=border_color),
+        bottom=Side(style=border_style, color=border_color),
+    ) if formatting.get("borders") else None
     for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center")
+        if header_border:
+            cell.border = header_border
 
 
 def _auto_size_columns(ws, formatting: Dict) -> None:
@@ -315,6 +374,41 @@ def _apply_commentary_fills(ws, formatting: Dict) -> None:
         cell.fill = PatternFill("solid", fgColor=fill_color)
 
 
+def _apply_icon_sets(ws, formatting: Dict) -> None:
+    icon_configs = formatting.get("icon_sets")
+    if not icon_configs:
+        return
+
+    if isinstance(icon_configs, dict):
+        icon_configs = [icon_configs]
+
+    headers = [cell.value for cell in ws[1]]
+    for config in icon_configs:
+        column_name = config.get("column")
+        if not column_name or column_name not in headers:
+            continue
+        col_idx = headers.index(column_name) + 1
+        start_row = 2
+        end_row = ws.max_row
+        if end_row < start_row:
+            continue
+        cell_range = f"{get_column_letter(col_idx)}{start_row}:{get_column_letter(col_idx)}{end_row}"
+        values = config.get("values")
+        if not values:
+            continue
+        icon_style = config.get("style", "3Arrows")
+        rule_type = config.get("type", "num")
+        rule = IconSetRule(
+            icon_style=icon_style,
+            type=rule_type,
+            values=values,
+            reverse=bool(config.get("reverse", False)),
+            showValue=not bool(config.get("icons_only", False)),
+            percent=bool(config.get("percent", False)),
+        )
+        ws.conditional_formatting.add(cell_range, rule)
+
+
 def _write_dataframe(ws, df: pd.DataFrame, formatting: Dict) -> None:
     if df.empty:
         ws.append(["No data available"])
@@ -323,6 +417,24 @@ def _write_dataframe(ws, df: pd.DataFrame, formatting: Dict) -> None:
     ws.append(list(df.columns))
     precision = int(formatting.get("precision", 2))
     num_format = f"0.{''.join(['0' for _ in range(precision)])}" if precision > 0 else "0"
+
+    body_font = Font(
+        name=formatting.get("body_font", "Calibri"),
+        size=float(formatting.get("body_font_size", 11)),
+    )
+    alignment_config = formatting.get("body_alignment", {})
+    body_alignment = Alignment(
+        horizontal=alignment_config.get("horizontal", "left"),
+        vertical=alignment_config.get("vertical", "center"),
+        wrap_text=alignment_config.get("wrap_text", True),
+    )
+    border_config = formatting.get("borders", {})
+    border = None
+    if border_config:
+        border_side = Side(style=border_config.get("style", "thin"), color=border_config.get("color", "D9D9D9"))
+        border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
+    data_row_height = float(formatting.get("row_height", 18))
+    header_row_height = float(formatting.get("header_row_height", data_row_height + 2))
 
     for _, row in df.iterrows():
         values: List[object] = []
@@ -334,17 +446,24 @@ def _write_dataframe(ws, df: pd.DataFrame, formatting: Dict) -> None:
         ws.append(values)
 
     _apply_header_style(ws, formatting)
+    ws.row_dimensions[1].height = header_row_height
     _auto_size_columns(ws, formatting)
 
     headers = list(df.columns)
     for row_idx in range(2, ws.max_row + 1):
+        ws.row_dimensions[row_idx].height = data_row_height
         for col_idx, header in enumerate(headers, start=1):
             cell = ws.cell(row=row_idx, column=col_idx)
             if isinstance(cell.value, (int, float)) and header not in {"vendor_code", "asin", "metric", "entity_type", "Commentary_Type", "Commentary_Insight"}:
                 cell.number_format = num_format
+            if border:
+                cell.border = border
+            cell.font = body_font
+            cell.alignment = body_alignment
 
     _apply_score_conditional_formatting(ws, formatting)
     _apply_commentary_fills(ws, formatting)
+    _apply_icon_sets(ws, formatting)
 
 
 def _create_summary_sheet(ws, data: DashboardData, summary_config: Dict) -> Dict[str, object]:

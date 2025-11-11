@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -15,11 +16,28 @@ import yaml
 LOGGER_NAME = "brightstar.phase1"
 
 
+def _normalize_header_token(text: str) -> str:
+    """Return a lowercase alphanumeric token for fuzzy header comparisons."""
+
+    return re.sub(r"[^a-z0-9]", "", str(text).lower())
+
+
+DATE_RANGE_PATTERN = re.compile(
+    r"(\d{1,2}/\d{1,2}/\d{2,4})\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{2,4})"
+)
+WEEK_NUMBER_PATTERN = re.compile(
+    r"(?:FW|W)\s*0?(\d{1,2})(?:[^\d]*(\d{4}))?",
+    flags=re.IGNORECASE,
+)
+ISO_WEEK_PATTERN = re.compile(r"(\d{4})[-_/]?W?0?(\d{1,2})")
+
+
 @dataclass
 class WeekLookup:
     """Container that accelerates week label lookups."""
 
     mapping: pd.DataFrame
+    _cache: Dict[str, Tuple[str, Optional[str], Optional[str]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.mapping.empty:
@@ -33,17 +51,32 @@ class WeekLookup:
     def resolve(self, raw_label: str) -> Tuple[str, Optional[str], Optional[str]]:
         """Return normalized label and boundaries for a raw week label."""
 
-        key = str(raw_label).strip().lower()
-        if not key:
+        key = str(raw_label).strip()
+        normalized_key = key.lower()
+        if not normalized_key:
             return "", None, None
-        if key in self._lookup.index:
-            row = self._lookup.loc[key]
-            return (
+
+        if normalized_key in self._cache:
+            return self._cache[normalized_key]
+
+        if normalized_key in self._lookup.index:
+            row = self._lookup.loc[normalized_key]
+            result = (
                 str(row["week_label"]),
                 _safe_date(row.get("week_start")),
                 _safe_date(row.get("week_end")),
             )
-        return str(raw_label), None, None
+            self._cache[normalized_key] = result
+            return result
+
+        parsed = _parse_week_from_label(key)
+        if parsed:
+            self._cache[normalized_key] = parsed
+            return parsed
+
+        result = (key, None, None)
+        self._cache[normalized_key] = result
+        return result
 
 
 def _safe_date(value: object) -> Optional[str]:
@@ -51,6 +84,51 @@ def _safe_date(value: object) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _parse_week_from_label(raw_label: str) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+    """Parse date ranges or explicit week references from a raw label."""
+
+    text = str(raw_label).strip()
+    if not text:
+        return None
+
+    range_match = DATE_RANGE_PATTERN.search(text)
+    if range_match:
+        start_raw, end_raw = range_match.groups()
+        start_dt = pd.to_datetime(start_raw, errors="coerce")
+        end_dt = pd.to_datetime(end_raw, errors="coerce")
+        if pd.notna(start_dt) and pd.notna(end_dt):
+            iso = start_dt.isocalendar()
+            week_label, iso_start, iso_end = _week_from_number(iso.year, iso.week)
+            start_value = iso_start or start_dt.strftime("%Y-%m-%d")
+            end_value = iso_end or end_dt.strftime("%Y-%m-%d")
+            return week_label, start_value, end_value
+
+    iso_match = ISO_WEEK_PATTERN.search(text)
+    if iso_match:
+        year = int(iso_match.group(1))
+        week = int(iso_match.group(2))
+        return _week_from_number(year, week)
+
+    week_match = WEEK_NUMBER_PATTERN.search(text)
+    if week_match:
+        week = int(week_match.group(1))
+        year = week_match.group(2)
+        if year:
+            return _week_from_number(int(year), week)
+
+    return None
+
+
+def _week_from_number(year: int, week: int) -> Tuple[str, str, str]:
+    label = f"{year}W{week:02d}"
+    try:
+        start = date.fromisocalendar(year, week, 1)
+        end = date.fromisocalendar(year, week, 7)
+    except ValueError:
+        return label, None, None
+    return label, start.isoformat(), end.isoformat()
 
 
 def load_config(path: str | Path) -> Dict:
@@ -107,12 +185,137 @@ def load_calendar_map(path: str | Path) -> WeekLookup:
     return WeekLookup(df)
 
 
+def load_master_lookup(path: str | Path, config: Dict | None = None) -> pd.DataFrame:
+    """Load the master reference file linking ASINs to vendor details."""
+
+    if not path:
+        return pd.DataFrame(columns=["asin", "vendor_code", "vendor_name"])
+
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame(columns=["asin", "vendor_code", "vendor_name"])
+
+    config = config or {}
+    sheet_name = config.get("sheet_name")
+    columns = config.get("columns", {})
+
+    frame = (
+        pd.read_excel(path, sheet_name=sheet_name)
+        if path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+        else pd.read_csv(path)
+    )
+    if columns:
+        rename_map = {value: key for key, value in columns.items()}
+        frame = frame.rename(columns=rename_map)
+
+    expected = {"asin", "vendor_code", "vendor_name"}
+    # Attempt case-insensitive rename when explicit mapping is not provided
+    rename_map = {}
+    lower_map = {col.lower(): col for col in frame.columns}
+    for key in expected:
+        if key not in frame.columns and key in lower_map:
+            rename_map[lower_map[key]] = key
+    if rename_map:
+        frame = frame.rename(columns=rename_map)
+
+    frame = frame[[col for col in frame.columns if col in expected]].copy()
+    for column in ("asin", "vendor_code", "vendor_name"):
+        if column not in frame.columns:
+            frame[column] = pd.NA
+        else:
+            frame[column] = frame[column].apply(
+                lambda value: (str(value).strip() or pd.NA)
+                if pd.notna(value)
+                else pd.NA
+            )
+
+    frame["asin"] = frame["asin"].apply(
+        lambda value: (str(value).strip() or pd.NA) if pd.notna(value) else pd.NA
+    )
+    frame = frame.dropna(subset=["asin"])  # drop rows with missing ASIN
+    frame = frame.drop_duplicates(subset=["asin"], keep="last")
+    return frame[["asin", "vendor_code", "vendor_name"]]
+
+
+def apply_master_lookup(df: pd.DataFrame, master_lookup: pd.DataFrame) -> pd.DataFrame:
+    """Enrich normalized rows with vendor metadata from the master lookup."""
+
+    if master_lookup.empty:
+        if "vendor_name" not in df.columns:
+            df = df.copy()
+            df["vendor_name"] = pd.NA
+        return df
+
+    normalized = df.copy()
+    if "asin" not in normalized.columns:
+        normalized["asin"] = pd.NA
+    normalized["asin"] = normalized["asin"].astype(str).str.strip()
+    enriched = normalized.merge(master_lookup, on="asin", how="left", suffixes=("", "_master"))
+
+    if "vendor_code_master" in enriched.columns:
+        enriched["vendor_code"] = enriched["vendor_code_master"].where(
+            enriched["vendor_code_master"].notna() & (enriched["vendor_code_master"].astype(str).str.len() > 0),
+            enriched["vendor_code"],
+        )
+        enriched.drop(columns=["vendor_code_master"], inplace=True)
+
+    if "vendor_name_master" in enriched.columns:
+        enriched["vendor_name"] = enriched["vendor_name_master"].where(
+            enriched["vendor_name_master"].notna() & (enriched["vendor_name_master"].astype(str).str.len() > 0),
+            enriched.get("vendor_name"),
+        )
+        enriched.drop(columns=["vendor_name_master"], inplace=True)
+
+    if "vendor_name" not in enriched.columns:
+        enriched["vendor_name"] = pd.NA
+    else:
+        enriched["vendor_name"] = enriched["vendor_name"].apply(
+            lambda value: (str(value).strip() or pd.NA)
+            if pd.notna(value)
+            else pd.NA
+        )
+
+    enriched["vendor_code"] = enriched["vendor_code"].apply(
+        lambda value: (str(value).strip() or pd.NA) if pd.notna(value) else pd.NA
+    )
+
+    return enriched
+
+
 def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize header casing and whitespace."""
 
     df = df.copy()
     df.columns = [str(col).strip() for col in df.columns]
     return df
+
+
+def detect_identifier_column(
+    df: pd.DataFrame,
+    aliases: Iterable[str],
+    fallback_index: Optional[int] = None,
+    default_name: Optional[str] = None,
+) -> Tuple[pd.DataFrame, Optional[str]]:
+    """Detect a column by alias and optionally create it when missing."""
+
+    alias_tokens = [_normalize_header_token(alias) for alias in aliases]
+    normalized_map = {_normalize_header_token(col): col for col in df.columns}
+
+    for token in alias_tokens:
+        if token and token in normalized_map:
+            return df, normalized_map[token]
+
+    if fallback_index is not None:
+        columns = list(df.columns)
+        if -len(columns) <= fallback_index < len(columns):
+            return df, columns[fallback_index]
+
+    if default_name and default_name not in df.columns:
+        df = df.copy()
+        df[default_name] = pd.NA
+        return df, default_name
+
+    return df, default_name if default_name in df.columns else None
 
 
 def detect_structure(df: pd.DataFrame, id_columns: Iterable[str]) -> str:
@@ -140,17 +343,19 @@ def split_metric_and_week(column_name: str) -> Tuple[str, Optional[str]]:
     clean_name = str(column_name).strip()
     paren_matches = re.findall(r"\(([^()]*)\)", clean_name)
     if paren_matches:
-        week_token = paren_matches[-1].strip()
-        metric_part = clean_name[: clean_name.rfind(f"({paren_matches[-1]})")].strip()
-        if not metric_part:
-            metric_part = clean_name
-        if week_token:
-            return metric_part.strip(), week_token
+        for token in reversed(paren_matches):
+            candidate = token.strip()
+            if not candidate:
+                continue
+            if not re.search(r"[A-Za-z0-9]", candidate):
+                continue
+            metric_part = clean_name[: clean_name.rfind(f"({token})")].strip()
+            if not metric_part:
+                metric_part = clean_name
+            if _parse_week_from_label(candidate) or re.search(r"\bW\d{1,2}\b", candidate, re.IGNORECASE) or re.search(r"\d", candidate):
+                return metric_part.strip(), candidate
 
-    range_match = re.search(
-        r"(\d{2}/\d{2}/\d{4})\s*[-–]\s*(\d{2}/\d{2}/\d{4})",
-        clean_name,
-    )
+    range_match = DATE_RANGE_PATTERN.search(clean_name)
     if range_match:
         return clean_name[: range_match.start()].strip(), f"{range_match.group(1)}-{range_match.group(2)}"
 

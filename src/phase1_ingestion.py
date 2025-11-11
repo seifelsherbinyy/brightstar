@@ -8,13 +8,16 @@ from typing import Iterable, List, Optional
 import pandas as pd
 
 from .ingestion_utils import (
+    apply_master_lookup,
     deduplicate_records,
     detect_metric_column,
     detect_structure,
     detect_value_column,
     detect_week_column,
+    detect_identifier_column,
     ensure_directory,
     load_calendar_map,
+    load_master_lookup,
     load_config,
     melt_wide_dataframe,
     normalize_headers,
@@ -28,30 +31,54 @@ from .ingestion_utils import (
 )
 
 
-def resolve_id_columns(df: pd.DataFrame, config: dict) -> List[str]:
-    """Determine identifier columns using config indices or explicit names."""
+def resolve_id_columns(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, List[str]]:
+    """Determine identifier columns using configured aliases or positional hints."""
 
-    id_columns = config["ingestion"].get("id_columns", [])
-    if all(col in df.columns for col in id_columns):
-        return id_columns
+    ingestion_config = config.get("ingestion", {})
+    explicit = ingestion_config.get("id_columns", [])
+    if explicit and all(col in df.columns for col in explicit):
+        return df, explicit
 
-    vendor_idx = config["ingestion"].get("vendor_column", 0)
-    asin_idx = config["ingestion"].get("asin_column", 1)
-    columns = list(df.columns)
-    try:
-        return [columns[vendor_idx], columns[asin_idx]]
-    except IndexError as exc:  # pragma: no cover - configuration error should surface early
-        raise ValueError("Unable to resolve identifier columns from configuration.") from exc
+    aliases = ingestion_config.get("column_aliases", {})
+    asin_aliases: Iterable[str] = aliases.get("asin", ["asin"])
+    vendor_aliases: Iterable[str] = aliases.get("vendor", ["vendor", "vendor_code"])
+
+    vendor_fallback = ingestion_config.get("vendor_column")
+    asin_fallback = ingestion_config.get("asin_column")
+
+    working_df, vendor_column = detect_identifier_column(
+        df,
+        vendor_aliases,
+        fallback_index=vendor_fallback,
+        default_name="Vendor",
+    )
+
+    working_df, asin_column = detect_identifier_column(
+        working_df,
+        asin_aliases,
+        fallback_index=asin_fallback,
+        default_name="ASIN",
+    )
+
+    if asin_column is None:
+        raise ValueError("Unable to detect ASIN column. Provide aliases in configuration or ensure header includes ASIN.")
+
+    if vendor_column is None:
+        working_df = working_df.copy()
+        vendor_column = "Vendor"
+        working_df[vendor_column] = pd.NA
+
+    return working_df, [vendor_column, asin_column]
 
 
-def ingest_file(path: Path, config: dict, lookup) -> pd.DataFrame:
+def ingest_file(path: Path, config: dict, lookup, master_lookup: pd.DataFrame | None = None) -> pd.DataFrame:
     """Normalize a single raw export file."""
 
     allowed = config["ingestion"].get("allowed_extensions", [".csv", ".xlsx"])
     validate_extension(path, allowed)
     df_raw = read_input_file(path)
     df_raw = normalize_headers(df_raw)
-    id_columns = resolve_id_columns(df_raw, config)
+    df_raw, id_columns = resolve_id_columns(df_raw, config)
 
     structure = detect_structure(df_raw, id_columns)
     value_round = config["ingestion"].get("value_round")
@@ -82,6 +109,8 @@ def ingest_file(path: Path, config: dict, lookup) -> pd.DataFrame:
         )
 
     normalized["source_file"] = path.name
+    if master_lookup is not None:
+        normalized = apply_master_lookup(normalized, master_lookup)
     return normalized
 
 
@@ -107,12 +136,17 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
     config = load_config(config_path)
     logger = setup_logging(config)
     lookup = load_calendar_map(config["paths"]["calendar_map"])
+    master_lookup = load_master_lookup(
+        config["paths"].get("masterfile"),
+        config.get("masterfile"),
+    )
 
     file_paths = gather_input_files(config, [Path(p) for p in input_files] if input_files else None)
     if not file_paths:
         logger.warning("No input files found for Phase 1 ingestion.")
         return pd.DataFrame(columns=[
             "vendor_code",
+            "vendor_name",
             "asin",
             "metric",
             "week_label",
@@ -126,12 +160,15 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
     frames = []
     for path in file_paths:
         logger.info("Ingesting %s", path)
-        normalized = ingest_file(path, config, lookup)
+        normalized = ingest_file(path, config, lookup, master_lookup)
         frames.append(normalized)
 
     combined = pd.concat(frames, ignore_index=True)
     combined = deduplicate_records(combined, logger)
-    combined.sort_values(["vendor_code", "asin", "metric", "week_start", "week_label"], inplace=True)
+    combined.sort_values(
+        ["vendor_code", "vendor_name", "asin", "metric", "week_start", "week_label"],
+        inplace=True,
+    )
 
     output_path = write_output(combined, config, logger)
     logger.info("Normalized dataset written to %s", output_path)

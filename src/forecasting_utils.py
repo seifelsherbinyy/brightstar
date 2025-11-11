@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,13 +20,15 @@ LOGGER_NAME = "brightstar.phase4"
 class ForecastContext:
     """Configuration bundle required to generate forecasts."""
 
-    horizon: int
+    horizons: Sequence[int]
     min_history: int
     frequency: str
     metrics: Sequence[str]
     ensemble_weights: Dict[str, float]
     metric_directions: Dict[str, str]
     uncertainty_buffer: float
+    accuracy_backtest: int
+    risk_gain_thresholds: Dict[str, float]
 
 
 def setup_logging(config: Dict) -> logging.Logger:
@@ -98,7 +100,16 @@ def build_context(config: Dict) -> ForecastContext:
     """Assemble the forecasting context from configuration settings."""
 
     forecasting_config = config.get("forecasting", {})
-    horizon = int(forecasting_config.get("horizon_weeks", 4))
+    horizons_config = forecasting_config.get("horizons_weeks")
+    if horizons_config:
+        horizons = [int(value) for value in horizons_config if int(value) > 0]
+    else:
+        horizon = int(forecasting_config.get("horizon_weeks", 4))
+        horizons = [horizon]
+
+    if not horizons:
+        raise ValueError("At least one forecast horizon must be configured.")
+
     min_history = int(forecasting_config.get("min_history_weeks", 3))
     frequency = str(forecasting_config.get("frequency", "W-MON"))
     metrics = list(forecasting_config.get("metrics", []))
@@ -113,15 +124,23 @@ def build_context(config: Dict) -> ForecastContext:
         "metric_directions", {}
     )
     uncertainty_buffer = float(forecasting_config.get("uncertainty_buffer_pct", 0.15))
+    accuracy_backtest = int(forecasting_config.get("accuracy_backtest_weeks", 4))
+    risk_gain_thresholds = {
+        "gain_pct": float(forecasting_config.get("risk_gain_thresholds", {}).get("gain_pct", 0.05)),
+        "risk_pct": float(forecasting_config.get("risk_gain_thresholds", {}).get("risk_pct", -0.05)),
+        "gain_absolute": float(forecasting_config.get("risk_gain_thresholds", {}).get("gain_absolute", 0.0)),
+    }
 
     return ForecastContext(
-        horizon=horizon,
+        horizons=horizons,
         min_history=min_history,
         frequency=frequency,
         metrics=metrics,
         ensemble_weights={str(k): float(v) for k, v in ensemble_weights.items()},
         metric_directions={str(k): str(v) for k, v in metric_directions.items()},
         uncertainty_buffer=uncertainty_buffer,
+        accuracy_backtest=accuracy_backtest,
+        risk_gain_thresholds=risk_gain_thresholds,
     )
 
 
@@ -283,25 +302,26 @@ def _combine_forecasts(
         raise ValueError("At least one forecast method is required to combine results.")
 
     combined = pd.DataFrame({"forecast_week": future_index})
+    requested_weights = {name: float(weights.get(name, 0.0)) for name in forecasts}
+    if not any(weight > 0 for weight in requested_weights.values()):
+        requested_weights = {name: 1.0 for name in forecasts}
+
     total_weight = 0.0
     value_accumulator = np.zeros(len(future_index))
     lower_accumulator = np.zeros(len(future_index))
     upper_accumulator = np.zeros(len(future_index))
 
     for name, forecast in forecasts.items():
-        weight = float(weights.get(name, 0.0))
+        weight = requested_weights.get(name, 0.0)
         if weight <= 0:
             continue
-        aligned = (
-            forecast.set_index("forecast_week").reindex(future_index).ffill().bfill()
-        )
+        aligned = forecast.set_index("forecast_week").reindex(future_index).ffill().bfill()
         value_accumulator += aligned["forecast_value"].to_numpy() * weight
         lower_accumulator += aligned["lower_bound"].to_numpy() * weight
         upper_accumulator += aligned["upper_bound"].to_numpy() * weight
         total_weight += weight
 
     if total_weight == 0:
-        # fall back to equally weighted blend
         total_weight = float(len(forecasts))
         for forecast in forecasts.values():
             aligned = forecast.set_index("forecast_week").reindex(future_index).ffill().bfill()
@@ -326,6 +346,119 @@ def _directional_potential_gain(
     return max(forecast_value - last_value, 0.0)
 
 
+def _evaluate_method_accuracy(
+    history: pd.DataFrame,
+    builder: Callable[[pd.DataFrame, int], Optional[pd.DataFrame]],
+    window: int,
+    logger: Optional[logging.Logger] = None,
+) -> Optional[float]:
+    if window <= 0 or len(history) <= 1:
+        return None
+
+    history = history.sort_values("week_start")
+    errors: List[float] = []
+
+    for offset in range(window, 0, -1):
+        training = history.iloc[: len(history) - offset]
+        if len(training) < 2:
+            break
+        forecast = builder(training, 1)
+        if forecast is None or forecast.empty:
+            return None
+        predicted = float(forecast.iloc[0]["forecast_value"])
+        actual = history.iloc[len(history) - offset]["value"]
+        if pd.isna(actual):
+            continue
+        errors.append(abs(float(actual) - predicted))
+
+    if not errors:
+        if logger:
+            logger.debug("Unable to compute accuracy window; defaulting to configured weights.")
+        return None
+
+    return float(np.mean(errors))
+
+
+def _derive_accuracy_weights(
+    history: pd.DataFrame,
+    builders: Dict[str, Callable[[pd.DataFrame, int], Optional[pd.DataFrame]]],
+    forecasts: Dict[str, pd.DataFrame],
+    context: ForecastContext,
+    logger: Optional[logging.Logger] = None,
+) -> Dict[str, float]:
+    available_builders = {name: builders[name] for name in forecasts if name in builders}
+    window = min(context.accuracy_backtest, max(0, len(history) - 1))
+    errors: Dict[str, float] = {}
+
+    for name, builder in available_builders.items():
+        error = _evaluate_method_accuracy(history, builder, window, logger)
+        if error is not None:
+            errors[name] = error
+
+    if not errors:
+        return {name: context.ensemble_weights.get(name, 0.0) for name in forecasts}
+
+    inverse_errors = {name: 1.0 / (error + 1e-6) for name, error in errors.items() if error >= 0}
+    if not inverse_errors:
+        return {name: context.ensemble_weights.get(name, 0.0) for name in forecasts}
+
+    total = sum(inverse_errors.values())
+    if total == 0:
+        return {name: context.ensemble_weights.get(name, 0.0) for name in forecasts}
+
+    return {name: inverse_errors.get(name, 0.0) / total for name in forecasts}
+
+
+def _risk_gain_flag(
+    delta_value: float,
+    delta_pct: Optional[float],
+    direction: str,
+    thresholds: Dict[str, float],
+) -> str:
+    gain_pct = thresholds.get("gain_pct", 0.05)
+    risk_pct = thresholds.get("risk_pct", -0.05)
+    gain_absolute = thresholds.get("gain_absolute", 0.0)
+
+    direction_normalized = str(direction).lower()
+    adjusted_delta = delta_value
+    adjusted_pct = delta_pct
+
+    if direction_normalized in {"down", "desc", "lower", "decrease"}:
+        adjusted_delta = -delta_value
+        adjusted_pct = -delta_pct if delta_pct is not None else None
+
+    if adjusted_pct is not None:
+        if adjusted_pct <= risk_pct:
+            return "critical"
+        if adjusted_pct <= risk_pct / 2:
+            return "at_risk"
+        if adjusted_pct >= gain_pct * 2:
+            return "high_performing"
+        if adjusted_pct >= gain_pct:
+            return "growing"
+
+    if adjusted_delta <= -abs(gain_absolute):
+        return "at_risk"
+    if adjusted_delta >= abs(gain_absolute) and adjusted_delta > 0:
+        return "growing"
+
+    return "steady"
+
+
+def _risk_flag_to_score(flag: str) -> int:
+    mapping = {
+        "critical": 0,
+        "at_risk": 1,
+        "steady": 2,
+        "growing": 3,
+        "high_performing": 4,
+    }
+    return mapping.get(str(flag).lower(), 2)
+
+
+
+
+
 def forecast_single_entity(
     history: pd.DataFrame,
     context: ForecastContext,
@@ -338,29 +471,38 @@ def forecast_single_entity(
     history = history.sort_values("week_start")
     history_weeks = len(history)
     last_week = history["week_start"].iloc[-1]
-    future_index = _compute_future_index(last_week, context.horizon, context.frequency)
+    max_horizon = max(context.horizons)
+    future_index = _compute_future_index(last_week, max_horizon, context.frequency)
 
     status_flags: List[str] = []
     if history_weeks < context.min_history:
         status_flags.append("insufficient_history")
 
+    builder_map: Dict[str, Callable[[pd.DataFrame, int], Optional[pd.DataFrame]]] = {
+        "prophet": lambda hist, horizon: _prophet_forecast(hist, horizon, context.frequency, logger),
+        "lstm": lambda hist, horizon: _lstm_forecast(hist, horizon, context.frequency, logger),
+        "fallback": lambda hist, horizon: _baseline_forecast(
+            hist, horizon, context.frequency, context.uncertainty_buffer
+        ),
+    }
+
     forecasts: Dict[str, pd.DataFrame] = {}
+    for name, builder in builder_map.items():
+        result = builder(history, max_horizon)
+        if result is not None and not result.empty:
+            forecasts[name] = result
 
-    prophet_forecast = _prophet_forecast(history, context.horizon, context.frequency, logger)
-    if prophet_forecast is not None:
-        forecasts["prophet"] = prophet_forecast
+    if "fallback" not in forecasts:
+        forecasts["fallback"] = builder_map["fallback"](history, max_horizon)
 
-    lstm_forecast = _lstm_forecast(history, context.horizon, context.frequency, logger)
-    if lstm_forecast is not None:
-        forecasts["lstm"] = lstm_forecast
-
-    if not forecasts:
+    if set(forecasts.keys()) == {"fallback"}:
         status_flags.append("fallback")
 
-    fallback_forecast = _baseline_forecast(history, context.horizon, context.frequency, context.uncertainty_buffer)
-    forecasts.setdefault("fallback", fallback_forecast)
+    weights = _derive_accuracy_weights(history, builder_map, forecasts, context, logger)
+    if not any(weight > 0 for weight in weights.values()):
+        weights = {name: context.ensemble_weights.get(name, 0.0) for name in forecasts}
 
-    combined = _combine_forecasts(forecasts, future_index, context.ensemble_weights)
+    combined = _combine_forecasts(forecasts, future_index, weights)
     combined["methods"] = ",".join(sorted(forecasts.keys()))
     combined["status"] = ",".join(sorted(status_flags)) if status_flags else "ready"
 
@@ -374,9 +516,63 @@ def forecast_single_entity(
     )
     combined["metric"] = metric
     combined["history_weeks"] = history_weeks
+    combined["week_offset"] = range(1, len(combined) + 1)
 
     for key, value in entity_descriptor.items():
         combined[key] = value
+
+    summary_rows: List[pd.Series] = []
+    for horizon in sorted(set(context.horizons)):
+        if horizon <= 0 or horizon > len(combined):
+            continue
+        row = combined.iloc[horizon - 1].copy()
+        row["forecast_horizon_weeks"] = horizon
+        delta_value = float(row["forecast_value"]) - last_value
+        row["delta_value"] = round(delta_value, 4)
+        row["delta_pct"] = float(delta_value / last_value) if last_value else None
+        flag = _risk_gain_flag(delta_value, row["delta_pct"], direction, context.risk_gain_thresholds)
+        row["risk_gain_flag"] = flag
+        row["Forecast_Risk_Flag"] = _risk_flag_to_score(flag)
+        summary_rows.append(row)
+
+    if not summary_rows and not combined.empty:
+        fallback_row = combined.iloc[-1].copy()
+        fallback_row["forecast_horizon_weeks"] = len(combined)
+        delta_value = float(fallback_row["forecast_value"]) - last_value
+        fallback_row["delta_value"] = round(delta_value, 4)
+        fallback_row["delta_pct"] = float(delta_value / last_value) if last_value else None
+        flag = _risk_gain_flag(delta_value, fallback_row["delta_pct"], direction, context.risk_gain_thresholds)
+        fallback_row["risk_gain_flag"] = flag
+        fallback_row["Forecast_Risk_Flag"] = _risk_flag_to_score(flag)
+        summary_rows.append(fallback_row)
+
+    if not summary_rows:
+        return pd.DataFrame(
+            columns=[
+                "entity_type",
+                "vendor_code",
+                "asin",
+                "metric",
+                "forecast_week",
+                "forecast_value",
+                "lower_bound",
+                "upper_bound",
+                "last_observed_week",
+                "last_observed_value",
+                "potential_gain",
+                "history_weeks",
+                "week_offset",
+                "forecast_horizon_weeks",
+                "delta_value",
+                "delta_pct",
+                "risk_gain_flag",
+                "Forecast_Risk_Flag",
+                "methods",
+                "status",
+            ]
+        )
+
+    combined_summary = pd.DataFrame(summary_rows)
 
     ordered_cols = [
         "entity_type",
@@ -391,15 +587,20 @@ def forecast_single_entity(
         "last_observed_value",
         "potential_gain",
         "history_weeks",
+        "week_offset",
+        "forecast_horizon_weeks",
+        "delta_value",
+        "delta_pct",
+        "risk_gain_flag",
+        "Forecast_Risk_Flag",
         "methods",
         "status",
     ]
     for column in ordered_cols:
-        if column not in combined.columns:
-            combined[column] = None
+        if column not in combined_summary.columns:
+            combined_summary[column] = None
 
-    return combined[ordered_cols]
-
+    return combined_summary[ordered_cols]
 
 def generate_forecasts(
     normalized_df: pd.DataFrame,
@@ -409,26 +610,31 @@ def generate_forecasts(
 ) -> pd.DataFrame:
     """Generate forecasts for either vendor or ASIN entity levels."""
 
+    base_columns = [
+        "entity_type",
+        "vendor_code",
+        "asin",
+        "metric",
+        "forecast_week",
+        "forecast_value",
+        "lower_bound",
+        "upper_bound",
+        "last_observed_week",
+        "last_observed_value",
+        "potential_gain",
+        "history_weeks",
+        "week_offset",
+        "forecast_horizon_weeks",
+        "delta_value",
+        "delta_pct",
+        "risk_gain_flag",
+        "Forecast_Risk_Flag",
+        "methods",
+        "status",
+    ]
+
     if normalized_df.empty:
-        return pd.DataFrame(
-            columns=
-            [
-                "entity_type",
-                "vendor_code",
-                "asin",
-                "metric",
-                "forecast_week",
-                "forecast_value",
-                "lower_bound",
-                "upper_bound",
-                "last_observed_week",
-                "last_observed_value",
-                "potential_gain",
-                "history_weeks",
-                "methods",
-                "status",
-            ]
-        )
+        return pd.DataFrame(columns=base_columns)
 
     prepared = prepare_entity_frames(normalized_df, entity_type)
 
@@ -456,27 +662,14 @@ def generate_forecasts(
             results.append(forecast)
 
     if not results:
-        return pd.DataFrame(
-            columns=
-            [
-                "entity_type",
-                "vendor_code",
-                "asin",
-                "metric",
-                "forecast_week",
-                "forecast_value",
-                "lower_bound",
-                "upper_bound",
-                "last_observed_week",
-                "last_observed_value",
-                "potential_gain",
-                "history_weeks",
-                "methods",
-                "status",
-            ]
-        )
+        return pd.DataFrame(columns=base_columns)
 
-    return pd.concat(results, ignore_index=True)
+    combined_results = pd.concat(results, ignore_index=True)
+    missing_cols = [col for col in base_columns if col not in combined_results.columns]
+    for column in missing_cols:
+        combined_results[column] = None
+
+    return combined_results[base_columns]
 
 
 def persist_forecast_outputs(df: pd.DataFrame, config: Dict, entity_type: str, logger: Optional[logging.Logger] = None) -> Tuple[Path, Optional[Path]]:

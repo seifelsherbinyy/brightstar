@@ -72,15 +72,15 @@ def build_config(tmp_path: Path) -> Path:
 def create_normalized_dataset(path: Path) -> pd.DataFrame:
     df = pd.DataFrame(
         [
-            {"vendor_code": "V1", "asin": "A1", "metric": "GMS($)", "value": 100},
-            {"vendor_code": "V1", "asin": "A1", "metric": "FillRate(%)", "value": 0.9},
-            {"vendor_code": "V1", "asin": "A1", "metric": "SoROOS(%)", "value": 0.1},
-            {"vendor_code": "V2", "asin": "A2", "metric": "GMS($)", "value": 50},
-            {"vendor_code": "V2", "asin": "A2", "metric": "FillRate(%)", "value": 0.6},
-            {"vendor_code": "V2", "asin": "A2", "metric": "SoROOS(%)", "value": 0.3},
-            {"vendor_code": "V3", "asin": "A3", "metric": "GMS($)", "value": 70},
-            {"vendor_code": "V3", "asin": "A3", "metric": "FillRate(%)", "value": None},
-            {"vendor_code": "V3", "asin": "A3", "metric": "SoROOS(%)", "value": 0.2},
+            {"vendor_code": "V1", "vendor_name": "Vendor One", "asin": "A1", "metric": "GMS($)", "value": 100},
+            {"vendor_code": "V1", "vendor_name": "Vendor One", "asin": "A1", "metric": "FillRate(%)", "value": 0.9},
+            {"vendor_code": "V1", "vendor_name": "Vendor One", "asin": "A1", "metric": "SoROOS(%)", "value": 0.1},
+            {"vendor_code": "V2", "vendor_name": "Vendor Two", "asin": "A2", "metric": "GMS($)", "value": 50},
+            {"vendor_code": "V2", "vendor_name": "Vendor Two", "asin": "A2", "metric": "FillRate(%)", "value": 0.6},
+            {"vendor_code": "V2", "vendor_name": "Vendor Two", "asin": "A2", "metric": "SoROOS(%)", "value": 0.3},
+            {"vendor_code": "V3", "vendor_name": "Vendor Three", "asin": "A3", "metric": "GMS($)", "value": 70},
+            {"vendor_code": "V3", "vendor_name": "Vendor Three", "asin": "A3", "metric": "FillRate(%)", "value": None},
+            {"vendor_code": "V3", "vendor_name": "Vendor Three", "asin": "A3", "metric": "SoROOS(%)", "value": 0.2},
         ]
     )
     df["week_label"] = "2025W37"
@@ -99,6 +99,9 @@ def test_scoring_generates_ranked_scorecards(tmp_path):
 
     assert not vendor_df.empty
     assert not asin_df.empty
+    assert "vendor_name" in vendor_df.columns
+    expected_names = {"Vendor One", "Vendor Two", "Vendor Three"}
+    assert set(vendor_df.drop_duplicates(subset=["vendor_code"])["vendor_name"]) == expected_names
 
     composite_scores = (
         vendor_df.drop_duplicates(subset=["vendor_code", "Composite_Score"])
@@ -116,6 +119,10 @@ def test_scoring_generates_ranked_scorecards(tmp_path):
     ranks = vendor_df.drop_duplicates(subset=["vendor_code", "Rank_Overall"]).set_index("vendor_code")
     assert ranks.loc["V1", "Rank_Overall"] == 1
     assert ranks.loc["V2", "Rank_Overall"] == ranks["Rank_Overall"].max()
+
+    assert "Improvement_Rank" in vendor_df.columns
+    improvement = vendor_df[vendor_df["metric"] == "GMS($)"]
+    assert improvement["Improvement_Rank"].notna().all()
 
     gms_ranks = (
         vendor_df[vendor_df["metric"] == "GMS($)"]
