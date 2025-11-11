@@ -1,0 +1,5 @@
+vendor_code,asin,metric,week_label,week_raw,week_start,week_end,value,source_file
+V1,A1,GMS($),2025W36,09/01/2025-09/07/2025,2025-09-01,2025-09-07,100.0,sample_vendor.csv
+V1,A1,GMS($),2025W37,09/08/2025-09/14/2025,2025-09-08,2025-09-14,110.0,sample_vendor.csv
+V2,A2,GMS($),2025W36,09/01/2025-09/07/2025,2025-09-01,2025-09-07,200.0,sample_vendor.csv
+V2,A2,GMS($),2025W37,09/08/2025-09/14/2025,2025-09-08,2025-09-14,210.0,sample_vendor.csv

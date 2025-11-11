@@ -1,0 +1,194 @@
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  logs_dir: logs
+  calendar_map: data/reference/calendar_map.csv
+  normalized_output: data/processed/normalized_phase1.parquet
+  ingestion_state: data/processed/ingestion_state.json
+  scorecards_dir: data/processed/scorecards
+  scorecard_vendor_csv: data/processed/scorecards/vendor_scorecard.csv
+  scorecard_vendor_parquet: data/processed/scorecards/vendor_scorecard.parquet
+  scorecard_asin_csv: data/processed/scorecards/asin_scorecard.csv
+  scorecard_asin_parquet: data/processed/scorecards/asin_scorecard.parquet
+  scorecard_audit_csv: data/processed/scorecards/score_audit.csv
+  scorecard_metadata: data/processed/scorecards/run_metadata.json
+  forecasts_dir: data/processed/forecasts
+  forecast_vendor_csv: data/processed/forecasts/vendor_forecasts.csv
+  forecast_vendor_parquet: data/processed/forecasts/vendor_forecasts.parquet
+  forecast_asin_csv: data/processed/forecasts/asin_forecasts.csv
+  forecast_asin_parquet: data/processed/forecasts/asin_forecasts.parquet
+  forecast_metadata: data/processed/forecasts/run_metadata.json
+  dashboard_dir: data/processed/dashboard
+logging:
+  level: INFO
+  file_name: phase1_ingestion.log
+  scoring_level: INFO
+  scoring_file_name: phase2_scoring.log
+  forecasting_level: INFO
+  forecasting_file_name: phase4_forecasting.log
+  pipeline_level: INFO
+  pipeline_file_name: brightstar_pipeline.log
+ingestion:
+  vendor_column: 0
+  asin_column: 1
+  metric_columns_start: 2
+  id_columns:
+    - Vendor
+    - ASIN
+  value_round: 4
+  deduplicate: true
+  force_long_format: false
+  allowed_extensions:
+    - .csv
+    - .xlsx
+  output_format: parquet
+calendar_mapping:
+  week_label_column: week_label
+  start_date_column: week_start
+  end_date_column: week_end
+summary:
+  enabled: true
+  template: "Processed {total_rows} rows across {unique_weeks} weeks. Last week: {last_week}."
+scoring:
+  normalized_input: data/processed/normalized_phase1.parquet
+  aggregation: mean
+  fallback_normalized_value: 0.5
+  composite_scale: 1000
+  thresholds:
+    excellent: 850
+    good: 700
+    fair: 550
+    poor: 0
+  metric_weights:
+    GMS($): 0.4
+    FillRate(%): 0.3
+    SoROOS(%): 0.2
+    ASP($): 0.1
+  metric_directions:
+    GMS($): up
+    FillRate(%): up
+    SoROOS(%): down
+    ASP($): up
+  improvement_rules:
+    FillRate(%):
+      normalized_lt: 0.5
+      label: Critical
+    SoROOS(%):
+      normalized_gt: 0.6
+      label: Critical
+    default:
+      normalized_lt: 0.4
+      label: Watch
+commentary:
+  normalized_input: data/processed/normalized_phase1.parquet
+  scorecard_vendor: data/processed/scorecards/vendor_scorecard.parquet
+  scorecard_asin: data/processed/scorecards/asin_scorecard.parquet
+  logging_level: INFO
+  logging_file_name: phase3_commentary.log
+  change_bands:
+    strong_increase: 0.1
+    moderate_increase: 0.04
+    flat: 0.01
+    moderate_decline: -0.04
+    strong_decline: -0.1
+  opportunity_thresholds:
+    default: 0.6
+  risk_thresholds:
+    default: 0.4
+  templates:
+    performance_summary:
+      strong_increase: "{entity} delivered a strong uptick in {metric} at {change_pct} WoW while reaching {current_value}."
+      moderate_increase: "{entity} recorded steady growth in {metric}, moving {direction} by {change_pct}."
+      flat: "{entity} maintained stable {metric} levels week over week."
+      moderate_decline: "{entity} saw a mild pullback in {metric} ({change_pct}); monitor execution."
+      strong_decline: "{entity} experienced a sharp decline in {metric} ({change_pct}). Immediate action recommended."
+      insufficient_history: "{entity} has limited history for {metric}; continue tracking future weeks."
+    opportunity:
+      below_threshold: "{metric} for {entity} sits below target at {current_value}; prioritize improvement initiatives."
+      improving: "{entity} is recovering in {metric}; sustain focus to surpass targets."
+      neutral: "No immediate opportunity signal for {metric}; maintain current plans."
+    risk:
+      strong_decline: "Risk alert: {metric} is deteriorating ({change_pct}) for {entity}."
+      moderate_decline: "Monitor {metric} for {entity}; recent softness of {change_pct} detected."
+      below_threshold: "{entity} remains below healthy levels in {metric} ({current_value})."
+      neutral: "No acute risk identified for {metric} this week."
+forecasting:
+  normalized_input: data/processed/normalized_phase1.parquet
+  output_dir: data/processed/forecasts
+  horizon_weeks: 4
+  min_history_weeks: 3
+  frequency: W-MON
+  metrics:
+    - GMS($)
+    - FillRate(%)
+    - SoROOS(%)
+    - ASP($)
+  ensemble_weights:
+    prophet: 0.6
+    lstm: 0.4
+    fallback: 1.0
+  metric_directions:
+    GMS($): up
+    FillRate(%): up
+    SoROOS(%): down
+    ASP($): up
+  uncertainty_buffer_pct: 0.15
+  metadata_fields:
+    include_history: true
+    include_methods: true
+dashboard:
+  output_dir: data/processed/dashboard
+  file_prefix: BrightStar_Dashboard
+  sheet_names:
+    summary: Summary
+    vendor_scorecard: Vendor Scorecards
+    asin_scorecard: ASIN Scorecards
+    commentary: Commentary
+    forecasts: Forecasts
+  sheet_order:
+    - Summary
+    - Vendor Scorecards
+    - ASIN Scorecards
+    - Commentary
+    - Forecasts
+  formatting:
+    header_fill: "1F4E78"
+    header_font_color: "FFFFFF"
+    body_font: Calibri
+    precision: 2
+    column_widths:
+      default: 18
+      overrides:
+        Commentary_Text: 60
+        Commentary_Insight: 60
+        Forecast_Potential_Gain: 20
+        Commentary_Type: 22
+    score_color_scale:
+      start_color: "F8696B"
+      mid_color: "FFEB84"
+      end_color: "63BE7B"
+      mid_value: 700
+      end_value: 950
+    improvement_fills:
+      Critical: "FFC7CE"
+      Watch: "FFEB9C"
+      default: "FFFFFF"
+    commentary_fills:
+      performance_summary: "C6EFCE"
+      opportunity: "FFEB9C"
+      risk: "FFC7CE"
+      default: "FFFFFF"
+    summary_number_format: "#,##0.00"
+  alerts:
+    score_high: 850
+    score_low: 550
+    risk_threshold: 0.4
+    opportunity_threshold: 0.7
+pipeline:
+  default_phases:
+    - phase1
+    - phase2
+    - phase3
+    - phase4
+    - phase5
+  allow_resume: true
