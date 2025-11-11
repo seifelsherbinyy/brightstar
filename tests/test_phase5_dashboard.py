@@ -63,7 +63,18 @@ def _build_config(tmp_path: Path) -> Path:
                 header_fill: "1F4E78"
                 header_font_color: "FFFFFF"
                 body_font: Calibri
+                header_font_size: 12
+                body_font_size: 11
                 precision: 2
+                body_alignment:
+                  horizontal: left
+                  vertical: center
+                  wrap_text: true
+                row_height: 20
+                header_row_height: 24
+                borders:
+                  style: thin
+                  color: D9D9D9
                 column_widths:
                   default: 18
                   overrides:
@@ -75,6 +86,21 @@ def _build_config(tmp_path: Path) -> Path:
                   end_color: "63BE7B"
                   mid_value: 700
                   end_value: 950
+                icon_sets:
+                  - column: Composite_Score
+                    style: 3TrafficLights1
+                    type: num
+                    values:
+                      - 0
+                      - 700
+                      - 900
+                  - column: Forecast_Potential_Gain
+                    style: 3Arrows
+                    type: num
+                    values:
+                      - 0
+                      - 5
+                      - 10
                 commentary_fills:
                   performance_summary: "C6EFCE"
                   opportunity: "FFEB9C"
@@ -128,6 +154,7 @@ def _create_inputs(tmp_path: Path) -> None:
             {
                 "entity_type": "vendor",
                 "vendor_code": "V1",
+                "vendor_name": "Vendor One",
                 "metric": "GMS($)",
                 "Composite_Score": 920.0,
                 "Improvement_Flag": "Watch",
@@ -136,6 +163,7 @@ def _create_inputs(tmp_path: Path) -> None:
             {
                 "entity_type": "vendor",
                 "vendor_code": "V2",
+                "vendor_name": "Vendor Two",
                 "metric": "GMS($)",
                 "Composite_Score": 640.0,
                 "Improvement_Flag": "Critical",
@@ -150,6 +178,7 @@ def _create_inputs(tmp_path: Path) -> None:
             {
                 "entity_type": "asin",
                 "vendor_code": "V1",
+                "vendor_name": "Vendor One",
                 "asin": "A1",
                 "metric": "GMS($)",
                 "Composite_Score": 910.0,
@@ -158,6 +187,7 @@ def _create_inputs(tmp_path: Path) -> None:
             {
                 "entity_type": "asin",
                 "vendor_code": "V2",
+                "vendor_name": "Vendor Two",
                 "asin": "A2",
                 "metric": "GMS($)",
                 "Composite_Score": 600.0,
@@ -259,6 +289,19 @@ def test_dashboard_generation_creates_expected_sheets(tmp_path: Path) -> None:
     assert vendor_sheet.cell(row=2, column=comment_col).value == "V1 grew GMS by 10% WoW."
     assert vendor_sheet.cell(row=2, column=forecast_col).value == 12.0
     assert len(vendor_sheet.conditional_formatting) > 0
+    header_font = vendor_sheet.cell(row=1, column=1).font
+    assert header_font.bold
+    assert header_font.size == 12
+    body_cell = vendor_sheet.cell(row=2, column=1)
+    assert body_cell.font.size == 11
+    assert body_cell.alignment.horizontal == "left"
+    assert vendor_sheet.row_dimensions[2].height == 20
+    assert body_cell.border.left.style == "thin"
+    icon_rules = []
+    cf_rules = getattr(vendor_sheet.conditional_formatting, "_cf_rules", {})
+    for rules in cf_rules.values():
+        icon_rules.extend([rule for rule in rules if getattr(rule, "type", None) == "iconSet"])
+    assert icon_rules
 
     summary_sheet = wb["Summary"]
     values = {summary_sheet.cell(row=row, column=1).value: summary_sheet.cell(row=row, column=2).value for row in range(3, 9)}

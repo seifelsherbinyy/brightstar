@@ -24,29 +24,24 @@ from .scoring_utils import (
     write_audit,
     write_metadata,
 )
-
-
-VENDOR_COLUMNS = ["entity_type", "vendor_code"]
-ASIN_COLUMNS = ["entity_type", "vendor_code", "asin"]
-
-
 def _prepare_entity_frame(
     normalized_df: pd.DataFrame,
     metric_map: Dict[str, object],
     entity_type: str,
     aggregation: str,
     fallback_normalised: float,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, list[str]]:
     """Aggregate and score metrics for the requested entity level."""
 
-    if entity_type == "vendor":
-        entity_columns = ["entity_type", "vendor_code"]
-        frame = normalized_df.copy()
-        frame["entity_type"] = "vendor"
-    else:
-        entity_columns = ["entity_type", "vendor_code", "asin"]
-        frame = normalized_df.copy()
-        frame["entity_type"] = "asin"
+    frame = normalized_df.copy()
+    frame["entity_type"] = entity_type
+
+    entity_columns: list[str] = ["entity_type", "vendor_code"]
+    if "vendor_name" in frame.columns and frame["vendor_name"].notna().any():
+        entity_columns.append("vendor_name")
+
+    if entity_type != "vendor":
+        entity_columns.append("asin")
 
     aggregated = aggregate_metrics(frame, entity_columns, aggregation=aggregation)
     aggregated = aggregated[aggregated["metric"].isin(metric_map.keys())]
@@ -56,7 +51,7 @@ def _prepare_entity_frame(
         metric_map=metric_map,
         fallback_normalised=fallback_normalised,
     )
-    return aggregated
+    return aggregated, entity_columns
 
 
 def _apply_scoring(
@@ -106,7 +101,7 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
     thresholds = scoring_config.get("thresholds", {})
     improvement_rules = scoring_config.get("improvement_rules", {})
 
-    vendor_scored = _prepare_entity_frame(
+    vendor_scored, vendor_entity_columns = _prepare_entity_frame(
         normalized_df,
         metric_map=actual_metric_map,
         entity_type="vendor",
@@ -119,10 +114,10 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
         composite_scale=composite_scale,
         thresholds=thresholds,
         improvement_rules=improvement_rules,
-        entity_columns=VENDOR_COLUMNS,
+        entity_columns=vendor_entity_columns,
     )
 
-    asin_scored = _prepare_entity_frame(
+    asin_scored, asin_entity_columns = _prepare_entity_frame(
         normalized_df,
         metric_map=actual_metric_map,
         entity_type="asin",
@@ -135,7 +130,7 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
         composite_scale=composite_scale,
         thresholds=thresholds,
         improvement_rules=improvement_rules,
-        entity_columns=ASIN_COLUMNS,
+        entity_columns=asin_entity_columns,
     )
 
     audit_frames = []
