@@ -16,12 +16,6 @@ import yaml
 LOGGER_NAME = "brightstar.phase1"
 
 
-def _normalize_header_token(text: str) -> str:
-    """Return a lowercase alphanumeric token for fuzzy header comparisons."""
-
-    return re.sub(r"[^a-z0-9]", "", str(text).lower())
-
-
 DATE_RANGE_PATTERN = re.compile(
     r"(\d{1,2}/\d{1,2}/\d{2,4})\s*[-–]\s*(\d{1,2}/\d{1,2}/\d{2,4})"
 )
@@ -247,8 +241,6 @@ def apply_master_lookup(df: pd.DataFrame, master_lookup: pd.DataFrame) -> pd.Dat
         return df
 
     normalized = df.copy()
-    if "asin" not in normalized.columns:
-        normalized["asin"] = pd.NA
     normalized["asin"] = normalized["asin"].astype(str).str.strip()
     enriched = normalized.merge(master_lookup, on="asin", how="left", suffixes=("", "_master"))
 

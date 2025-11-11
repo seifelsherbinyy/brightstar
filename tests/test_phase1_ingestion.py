@@ -82,9 +82,9 @@ def build_config(tmp_path: Path) -> Path:
 
 def create_sample_raw(raw_path: Path) -> Path:
     content = (
-        "Vendor,A S I N,GMS($) 09/01/2025-09/07/2025,GMS($) 09/08/2025-09/14/2025,Fill Rate (%) W36 2026,Revenue(09/22/2026-09/28/2026)\n"
-        ",A1,100,110,0.95,120\n"
-        ",A1,100,110,0.95,120\n"
+        "Vendor,ASIN,GMS($) 09/01/2025-09/07/2025,GMS($) 09/08/2025-09/14/2025,Fill Rate (%) W36 2026,Revenue(09/22/2026-09/28/2026)\n"
+        "V1,A1,100,110,0.95,120\n"
+        "V1,A1,100,110,0.95,120\n"
     )
     file_path = raw_path / "sample.csv"
     file_path.write_text(content)
@@ -104,7 +104,6 @@ def test_run_phase1_normalizes_weeks(tmp_path, capsys):
     assert not df.empty
     assert "vendor_name" in df.columns
     assert set(df["vendor_name"].dropna()) == {"Vendor One"}
-    assert set(df["vendor_code"].dropna()) == {"V_MASTER"}
     assert set(df["week_label"]) == {"2025W36", "2025W37", "2026W36", "2026W39"}
     fill_rate_row = df[df["metric"] == "Fill Rate (%)"].iloc[0]
     assert fill_rate_row["week_label"] == "2026W36"

@@ -11,5 +11,3 @@
 - If Parquet support is desired for scorecards, install `pyarrow` or `fastparquet`. The engine falls back to CSV output when these optional dependencies are unavailable.
 - Use the Phase 6 pipeline (`src/brightstar_pipeline.py`) and its `--resume` flag for production jobs to avoid reprocessing unchanged phases; logs aggregate to `logs/brightstar_pipeline.log` for simplified monitoring.
 - Dashboard styling can be tuned through `dashboard.formatting` (font sizes, borders, row heights, and icon set thresholds). Icon rules expect numeric thresholds, so adjust `values` for each column as business requirements evolve.
-- Ingestion auto-detects ASIN headers using the `ingestion.column_aliases` list; populate this when vendors deliver exports with inconsistent casing or spacing so the normalization step can still map ASINs and join Masterfile metadata.
-- Forecast configuration now supports multiple horizons via `forecasting.horizons_weeks` and computes ensemble weights from Prophet/LSTM accuracy backtests. Risk flags and deltas surface in dashboard exports (`Forecast_Risk_Flag`, `Forecast_Risk_Label`) for icon-based alerting.

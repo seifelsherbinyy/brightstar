@@ -226,33 +226,15 @@ dashboard:
       end_value: 950
     icon_sets:
       - column: Composite_Score
-        style: 5Quarters
+        style: 3TrafficLights1
         type: num
         values:
           - 0
-          - 550
           - 700
-          - 850
-          - 950
+          - 900
       - column: Forecast_Potential_Gain
-        style: 5ArrowsGray
+        style: 3Arrows
         type: num
-        values:
-          - -10
-          - 0
-          - 5
-          - 10
-          - 20
-      - column: Forecast_Risk_Flag
-        style: 5Rating
-        type: num
-        icons_only: true
-        values:
-          - 0
-          - 1
-          - 2
-          - 3
-          - 4
         values:
           - 0
           - 5
