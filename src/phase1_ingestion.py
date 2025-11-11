@@ -8,6 +8,7 @@ from typing import Iterable, List, Optional
 import pandas as pd
 
 from .ingestion_utils import (
+    apply_master_lookup,
     deduplicate_records,
     detect_metric_column,
     detect_structure,
@@ -15,6 +16,7 @@ from .ingestion_utils import (
     detect_week_column,
     ensure_directory,
     load_calendar_map,
+    load_master_lookup,
     load_config,
     melt_wide_dataframe,
     normalize_headers,
@@ -44,7 +46,7 @@ def resolve_id_columns(df: pd.DataFrame, config: dict) -> List[str]:
         raise ValueError("Unable to resolve identifier columns from configuration.") from exc
 
 
-def ingest_file(path: Path, config: dict, lookup) -> pd.DataFrame:
+def ingest_file(path: Path, config: dict, lookup, master_lookup: pd.DataFrame | None = None) -> pd.DataFrame:
     """Normalize a single raw export file."""
 
     allowed = config["ingestion"].get("allowed_extensions", [".csv", ".xlsx"])
@@ -82,6 +84,8 @@ def ingest_file(path: Path, config: dict, lookup) -> pd.DataFrame:
         )
 
     normalized["source_file"] = path.name
+    if master_lookup is not None:
+        normalized = apply_master_lookup(normalized, master_lookup)
     return normalized
 
 
@@ -107,12 +111,17 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
     config = load_config(config_path)
     logger = setup_logging(config)
     lookup = load_calendar_map(config["paths"]["calendar_map"])
+    master_lookup = load_master_lookup(
+        config["paths"].get("masterfile"),
+        config.get("masterfile"),
+    )
 
     file_paths = gather_input_files(config, [Path(p) for p in input_files] if input_files else None)
     if not file_paths:
         logger.warning("No input files found for Phase 1 ingestion.")
         return pd.DataFrame(columns=[
             "vendor_code",
+            "vendor_name",
             "asin",
             "metric",
             "week_label",
@@ -126,12 +135,15 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
     frames = []
     for path in file_paths:
         logger.info("Ingesting %s", path)
-        normalized = ingest_file(path, config, lookup)
+        normalized = ingest_file(path, config, lookup, master_lookup)
         frames.append(normalized)
 
     combined = pd.concat(frames, ignore_index=True)
     combined = deduplicate_records(combined, logger)
-    combined.sort_values(["vendor_code", "asin", "metric", "week_start", "week_label"], inplace=True)
+    combined.sort_values(
+        ["vendor_code", "vendor_name", "asin", "metric", "week_start", "week_label"],
+        inplace=True,
+    )
 
     output_path = write_output(combined, config, logger)
     logger.info("Normalized dataset written to %s", output_path)

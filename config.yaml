@@ -3,6 +3,7 @@ paths:
   processed_dir: data/processed
   logs_dir: logs
   calendar_map: data/reference/calendar_map.csv
+  masterfile: data/reference/Masterfile.xlsx
   normalized_output: data/processed/normalized_phase1.parquet
   ingestion_state: data/processed/ingestion_state.json
   scorecards_dir: data/processed/scorecards
@@ -49,6 +50,12 @@ calendar_mapping:
 summary:
   enabled: true
   template: "Processed {total_rows} rows across {unique_weeks} weeks. Last week: {last_week}."
+masterfile:
+  sheet_name: Master
+  columns:
+    asin: ASIN
+    vendor_code: Vendor Code
+    vendor_name: Vendor Name
 scoring:
   normalized_input: data/processed/normalized_phase1.parquet
   aggregation: mean
@@ -155,7 +162,18 @@ dashboard:
     header_fill: "1F4E78"
     header_font_color: "FFFFFF"
     body_font: Calibri
+    header_font_size: 12
+    body_font_size: 11
     precision: 2
+    body_alignment:
+      horizontal: left
+      vertical: center
+      wrap_text: true
+    row_height: 20
+    header_row_height: 24
+    borders:
+      style: thin
+      color: D9D9D9
     column_widths:
       default: 18
       overrides:
@@ -169,6 +187,21 @@ dashboard:
       end_color: "63BE7B"
       mid_value: 700
       end_value: 950
+    icon_sets:
+      - column: Composite_Score
+        style: 3TrafficLights1
+        type: num
+        values:
+          - 0
+          - 700
+          - 900
+      - column: Forecast_Potential_Gain
+        style: 3Arrows
+        type: num
+        values:
+          - 0
+          - 5
+          - 10
     improvement_fills:
       Critical: "FFC7CE"
       Watch: "FFEB9C"
