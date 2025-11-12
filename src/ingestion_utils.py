@@ -1,6 +1,7 @@
 """Utility functions supporting Phase 1 ingestion and normalization."""
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import re
@@ -11,6 +12,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 import yaml
+
 
 
 LOGGER_NAME = "brightstar.phase1"
@@ -193,41 +195,48 @@ def load_master_lookup(path: str | Path, config: Dict | None = None) -> pd.DataF
     sheet_name = config.get("sheet_name")
     columns = config.get("columns", {})
 
-    frame = (
-        pd.read_excel(path, sheet_name=sheet_name)
-        if path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}
-        else pd.read_csv(path)
-    )
+    # Support both .xlsx and .csv with multi-sheet handling
+    if path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        result = pd.read_excel(path, sheet_name=sheet_name)
+        
+        # If result is a dict of sheets, pick the right one
+        if isinstance(result, dict):
+            if sheet_name and sheet_name in result:
+                frame = result[sheet_name]
+            elif "Info" in result:
+                frame = result["Info"]
+            elif "Info2" in result:
+                frame = result["Info2"]
+            else:
+                # Pick the first sheet
+                frame = next(iter(result.values()))
+        else:
+            frame = result
+    else:
+        frame = pd.read_csv(path)
+    
     if columns:
         rename_map = {value: key for key, value in columns.items()}
         frame = frame.rename(columns=rename_map)
 
     expected = {"asin", "vendor_code", "vendor_name"}
-    # Attempt case-insensitive rename when explicit mapping is not provided
+    # Case-insensitive column rename (handle spaces and underscores)
+    lower_map = {c.lower().replace(' ', '_'): c for c in frame.columns}
     rename_map = {}
-    lower_map = {col.lower(): col for col in frame.columns}
     for key in expected:
         if key not in frame.columns and key in lower_map:
             rename_map[lower_map[key]] = key
     if rename_map:
         frame = frame.rename(columns=rename_map)
 
-    frame = frame[[col for col in frame.columns if col in expected]].copy()
-    for column in ("asin", "vendor_code", "vendor_name"):
-        if column not in frame.columns:
-            frame[column] = pd.NA
+    frame = frame[[c for c in frame.columns if c in expected]].copy()
+    for c in ("asin", "vendor_code", "vendor_name"):
+        if c not in frame.columns:
+            frame[c] = pd.NA
         else:
-            frame[column] = frame[column].apply(
-                lambda value: (str(value).strip() or pd.NA)
-                if pd.notna(value)
-                else pd.NA
-            )
+            frame[c] = frame[c].astype('string').str.strip()
 
-    frame["asin"] = frame["asin"].apply(
-        lambda value: (str(value).strip() or pd.NA) if pd.notna(value) else pd.NA
-    )
-    frame = frame.dropna(subset=["asin"])  # drop rows with missing ASIN
-    frame = frame.drop_duplicates(subset=["asin"], keep="last")
+    frame = frame.dropna(subset=['asin']).drop_duplicates(subset=['asin'], keep='last')
     return frame[["asin", "vendor_code", "vendor_name"]]
 
 
@@ -282,6 +291,11 @@ def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _normalize_header_token(token: str) -> str:
+    """Normalize a single header token for case-insensitive matching."""
+    return str(token).strip().lower().replace(" ", "_").replace("-", "_")
+
+
 def detect_identifier_column(
     df: pd.DataFrame,
     aliases: Iterable[str],
@@ -290,12 +304,17 @@ def detect_identifier_column(
 ) -> Tuple[pd.DataFrame, Optional[str]]:
     """Detect a column by alias and optionally create it when missing."""
 
-    alias_tokens = [_normalize_header_token(alias) for alias in aliases]
+    # Build normalized header map once
     normalized_map = {_normalize_header_token(col): col for col in df.columns}
 
-    for token in alias_tokens:
-        if token and token in normalized_map:
-            return df, normalized_map[token]
+    # For each candidate alias, normalize the alias token and look it up
+    for alias in aliases:
+        key = _normalize_header_token(alias)
+        if key in normalized_map:
+            detected = normalized_map[key]
+            series = df[detected].astype('string').str.strip()
+            if series.notna().any():
+                return df, detected
 
     if fallback_index is not None:
         columns = list(df.columns)
@@ -489,15 +508,28 @@ def write_output(df: pd.DataFrame, config: Dict, logger: logging.Logger) -> Path
 
     try:
         if fmt == "csv":
-            df.to_csv(output_path.with_suffix(".csv"), index=False)
-            return output_path.with_suffix(".csv")
+            csv_path = output_path.with_suffix(".csv")
+            df.to_csv(
+                csv_path,
+                index=False,
+                encoding='utf-8',
+                lineterminator='\n',
+                quoting=csv.QUOTE_MINIMAL
+            )
+            return csv_path
         if fmt == "parquet":
             df.to_parquet(output_path, index=False)
             return output_path
     except Exception as exc:  # pragma: no cover - fallback path is environment dependent
         logger.warning("Failed to write %s due to %s. Falling back to CSV.", fmt, exc)
         fallback = output_path.with_suffix(".csv")
-        df.to_csv(fallback, index=False)
+        df.to_csv(
+            fallback,
+            index=False,
+            encoding='utf-8',
+            lineterminator='\n',
+            quoting=csv.QUOTE_MINIMAL
+        )
         return fallback
 
     fallback = output_path.with_suffix(".csv")
