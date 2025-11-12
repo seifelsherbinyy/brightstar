@@ -1,8 +1,12 @@
 {
-  "timestamp": "2025-11-11T09:22:05.065042+00:00",
-  "horizon_weeks": 4,
-  "records_vendor": 8,
-  "records_asin": 8,
+  "timestamp": "2025-11-12T19:31:56.009795+00:00",
+  "horizons_weeks": [
+    4,
+    6,
+    12
+  ],
+  "records_vendor": 6,
+  "records_asin": 6,
   "metrics": [
     "GMS($)",
     "FillRate(%)",
@@ -11,9 +15,9 @@
   ],
   "output_paths": {
     "vendor_csv": "data/processed/forecasts/vendor_forecasts.csv",
-    "vendor_parquet": null,
+    "vendor_parquet": "data/processed/forecasts/vendor_forecasts.parquet",
     "asin_csv": "data/processed/forecasts/asin_forecasts.csv",
-    "asin_parquet": null
+    "asin_parquet": "data/processed/forecasts/asin_forecasts.parquet"
   },
   "history_summary": {
     "min_weeks_vendor": 2,
