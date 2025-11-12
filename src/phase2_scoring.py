@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Iterable
 
 import pandas as pd
@@ -78,6 +79,155 @@ def _apply_scoring(
 
 def _prepare_metric_map(config: Dict) -> Dict[str, object]:
     return build_metric_map(config)
+
+
+def validate_input_schema(df: pd.DataFrame) -> None:
+    """
+    Validate that input DataFrame has required columns.
+    
+    Raises:
+        ValueError: If required columns are missing
+    """
+    required_cols = ['entity_id', 'vendor_code', 'Week_Order', 'metric', 'value']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        raise ValueError(
+            f"Input data missing required columns: {missing_cols}. "
+            f"Expected columns: {required_cols}"
+        )
+
+
+def _generate_enhanced_outputs(
+    config: Dict,
+    vendor_scored: pd.DataFrame,
+    asin_scored: pd.DataFrame,
+    logger
+) -> None:
+    """
+    Generate enhanced scoring outputs: scoring_matrix.parquet and vendor_scoreboard.parquet.
+    
+    This creates wide-format outputs with per-metric contributions for better explainability.
+    """
+    from .ingestion_utils import ensure_directory
+    
+    # Determine output directory
+    output_dir = Path(config.get("paths", {}).get("scoring_output_dir", config["paths"]["processed_dir"]))
+    ensure_directory(output_dir)
+    
+    # Build scoring matrix from vendor and ASIN scored data
+    # Combine vendor and ASIN data
+    all_scored = []
+    if not vendor_scored.empty:
+        df_v = vendor_scored.copy()
+        df_v['entity_id'] = df_v['vendor_code']
+        all_scored.append(df_v)
+    if not asin_scored.empty:
+        df_a = asin_scored.copy()
+        df_a['entity_id'] = df_a.get('vendor_code', '') + '_' + df_a.get('asin', '')
+        all_scored.append(df_a)
+    
+    if not all_scored:
+        logger.warning("No scored data to generate enhanced outputs")
+        return
+    
+    combined = pd.concat(all_scored, ignore_index=True)
+    
+    # Build wide format with contributions per metric
+    # Get unique entity/week combinations
+    if 'Week_Order' not in combined.columns and 'week_label' in combined.columns:
+        # Map week labels to order
+        combined['Week_Order'] = combined.groupby('week_label').ngroup() + 1
+    elif 'Week_Order' not in combined.columns:
+        combined['Week_Order'] = 1
+    
+    # Pivot metrics to wide format
+    entity_cols = ['entity_id', 'vendor_code', 'Week_Order']
+    
+    # Get available entity columns
+    if 'vendor_name' in combined.columns:
+        entity_cols.append('vendor_name')
+    
+    # Build pivot with contributions
+    pivot_data = []
+    for entity_id in combined['entity_id'].unique():
+        entity_data = combined[combined['entity_id'] == entity_id]
+        
+        # Get first row for entity info
+        first_row = entity_data.iloc[0]
+        row_dict = {
+            'entity_id': entity_id,
+            'vendor_code': first_row.get('vendor_code', ''),
+            'Week_Order': first_row.get('Week_Order', 1)
+        }
+        
+        if 'vendor_name' in entity_data.columns:
+            row_dict['vendor_name'] = first_row.get('vendor_name', '')
+        
+        # Add composite score if available
+        if 'Composite_Score' in entity_data.columns:
+            row_dict['score_composite'] = first_row['Composite_Score']
+            row_dict['score_final'] = first_row['Composite_Score']
+        
+        # Add per-metric data
+        for _, metric_row in entity_data.iterrows():
+            metric_name = metric_row.get('metric', '')
+            if not metric_name:
+                continue
+            
+            # Add standardized value
+            if 'Normalized_Value' in metric_row:
+                row_dict[f'std_{metric_name}'] = metric_row['Normalized_Value']
+            
+            # Add contribution
+            if 'Weighted_Score' in metric_row:
+                row_dict[f'contrib_{metric_name}'] = metric_row['Weighted_Score']
+                
+                # Compute percentage contribution
+                if 'Composite_Score' in first_row and first_row['Composite_Score'] != 0:
+                    pct = (metric_row['Weighted_Score'] / first_row['Composite_Score']) * 100
+                    row_dict[f'pct_contrib_{metric_name}'] = pct
+        
+        # Add placeholder columns for enhanced features
+        row_dict['penalty_total'] = 0.0
+        row_dict['score_final_conf'] = 1.0
+        row_dict['reliability'] = 1.0
+        
+        pivot_data.append(row_dict)
+    
+    scoring_matrix = pd.DataFrame(pivot_data)
+    
+    # Save scoring matrix
+    try:
+        matrix_path = output_dir / "scoring_matrix.parquet"
+        scoring_matrix.to_parquet(matrix_path, index=False)
+        logger.info(f"Saved scoring_matrix.parquet with {len(scoring_matrix)} rows")
+    except Exception as e:
+        logger.warning(f"Failed to save parquet, falling back to CSV: {e}")
+        matrix_csv = output_dir / "scoring_matrix.csv"
+        scoring_matrix.to_csv(matrix_csv, index=False)
+        logger.info(f"Saved scoring_matrix.csv with {len(scoring_matrix)} rows")
+    
+    # Build vendor scoreboard
+    vendor_scoreboard = scoring_matrix.groupby(['vendor_code', 'Week_Order']).agg({
+        'score_final': 'mean'
+    }).reset_index()
+    
+    # Add rank within week
+    vendor_scoreboard['rank'] = vendor_scoreboard.groupby('Week_Order')['score_final'].rank(
+        ascending=False, method='min'
+    ).astype(int)
+    
+    # Save vendor scoreboard
+    try:
+        scoreboard_path = output_dir / "vendor_scoreboard.parquet"
+        vendor_scoreboard.to_parquet(scoreboard_path, index=False)
+        logger.info(f"Saved vendor_scoreboard.parquet with {len(vendor_scoreboard)} rows")
+    except Exception as e:
+        logger.warning(f"Failed to save parquet, falling back to CSV: {e}")
+        scoreboard_csv = output_dir / "vendor_scoreboard.csv"
+        vendor_scoreboard.to_csv(scoreboard_csv, index=False)
+        logger.info(f"Saved vendor_scoreboard.csv with {len(vendor_scoreboard)} rows")
 
 
 def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
@@ -176,6 +326,13 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
         print("Bottom 5 vendors:\n", bottom_vendors.to_string(index=False))
 
     logger.info("Phase 2 scoring completed for %s vendors and %s ASINs", metadata["records_vendor"], metadata["records_asin"])
+    
+    # Generate enhanced scoring matrix and vendor scoreboard
+    try:
+        _generate_enhanced_outputs(config, vendor_scored, asin_scored, logger)
+    except Exception as e:
+        logger.warning(f"Failed to generate enhanced outputs: {e}")
+    
     return {"vendor": vendor_scored, "asin": asin_scored, "audit": audit_df}
 
 
