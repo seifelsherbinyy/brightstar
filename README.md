@@ -199,6 +199,51 @@ The `config.yaml` allows controlling:
 * Enable scheduling of weekly runs (cron or workflow)
 
 
+## 📝 Known Issues / Data Types
+
+### Value Coercion and Parquet Format
+
+Phase 1 ingestion automatically coerces values to ensure Parquet compatibility:
+
+* **Currency values** like `$1,234.56` are converted to floats (1234.56)
+* **Percentage values** like `43.92%` are converted to decimals (0.4392)
+* **Comma-separated numbers** like `1,234` are converted to floats (1234.0)
+* **Invalid values** that cannot be parsed become NaN
+
+This coercion happens before writing to Parquet to avoid dtype errors. The system validates that ASIN and vendor_code columns exist and contain meaningful unique values before proceeding.
+
+### Parquet vs CSV Output
+
+**Parquet is strongly preferred** for normalized output because:
+* It preserves numeric types without ambiguity
+* It supports schema validation
+* It's more efficient for large datasets
+* It's the default format in `config.yaml`
+
+If Parquet writing fails (rare), the system automatically falls back to CSV with explicit options:
+* UTF-8 encoding
+* Minimal quoting
+* Unix-style line terminators (`\n`)
+
+When reading CSV files back, use explicit dtypes to preserve schema:
+
+```python
+df = pd.read_csv(
+    'normalized_phase1.csv',
+    dtype={'asin': 'string', 'vendor_code': 'string'},
+    keep_default_na=False
+)
+```
+
+### Masterfile Handling
+
+The masterfile (ASIN → vendor mapping) supports:
+* Both `.xlsx` and `.csv` formats
+* Case-insensitive column matching (e.g., "ASIN", "asin", "Asin" all work)
+* Multi-sheet Excel files (prefers 'Info', then 'Info2', then first sheet)
+* Automatic deduplication by ASIN (keeps last occurrence)
+
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) (if created) for guidelines.

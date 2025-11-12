@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
+import re
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -29,6 +31,21 @@ from .ingestion_utils import (
     write_output,
     write_state,
 )
+
+
+def _coerce_value_series(s: pd.Series) -> pd.Series:
+    """
+    Convert strings like '$1,234.56', '43.92%', '1,234' to floats.
+    Percent values become decimals (43.92% -> 0.4392).
+    Non-parsable values become NaN.
+    """
+    s = s.astype(str).str.strip()
+    pct_mask = s.str.endswith('%')
+    s_clean = s.str.replace(r'[\$,]', '', regex=True).str.rstrip('%')
+    s_num = pd.to_numeric(s_clean, errors='coerce')
+    s_num = np.where(pct_mask, s_num / 100.0, s_num)
+    return pd.Series(s_num, index=s.index)
+
 
 
 def resolve_id_columns(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, List[str]]:
@@ -169,6 +186,24 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
         ["vendor_code", "vendor_name", "asin", "metric", "week_start", "week_label"],
         inplace=True,
     )
+
+    # Enforce schema before persisting
+    combined['asin'] = combined['asin'].astype('string')
+    combined['vendor_code'] = combined['vendor_code'].astype('string')
+    combined['value'] = _coerce_value_series(combined['value'])
+
+    bad = combined['value'].isna() & combined['metric'].notna()
+    if bad.any():
+        print(f"[WARN] {bad.sum()} 'value' entries became NaN after coercion.")
+
+    # Debug logging and validation
+    print("DEBUG — unique asin:", combined['asin'].nunique(),
+          "unique vendor_code:", combined['vendor_code'].nunique())
+    
+    if combined['asin'].nunique() == 0:
+        raise ValueError("No unique ASINs found. Check header alias configuration.")
+    if combined['vendor_code'].nunique() == 0:
+        raise ValueError("No unique vendor codes found. Check header alias configuration.")
 
     output_path = write_output(combined, config, logger)
     logger.info("Normalized dataset written to %s", output_path)
