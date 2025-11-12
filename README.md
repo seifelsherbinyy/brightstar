@@ -79,6 +79,43 @@ brightstar/
    This reads the normalized dataset, applies the configurable metric weights/directions, and writes CSV/Parquet scorecards plus
    an audit trail under `data/processed/scorecards/`.
 
+   **Phase 2 Enhanced Features:**
+
+   Phase 2 now includes robust transforms, penalties, and explainability:
+
+   - **Configurable Transforms**: Apply winsorization, log1p, or logit transforms per metric
+   - **Robust Standardization**: Use percentile rank or robust z-scores with rolling windows
+   - **Penalty System**: Apply rule-based penalties with auditable JSON breakdown
+   - **Contributions**: Per-metric contributions to composite scores with percentage breakdowns
+   - **Reliability Scores**: Confidence metrics based on coverage and variance
+
+   **Outputs**:
+   - `data/processed/scorecards/`: Traditional long-format scorecards (vendor, ASIN, audit)
+   - `data/processed/scoring_matrix.parquet`: Wide-format matrix with per-metric contributions
+   - `data/processed/vendor_scoreboard.parquet`: Vendor rankings with composite scores
+
+   **Configuration**: Update `config.yaml` under the `scoring:` section with:
+   ```yaml
+   scoring:
+     rolling_weeks: 8                    # Rolling window for standardization
+     weights_must_sum_to_1: true         # Enforce weight normalization
+     metrics:
+       - name: GMS($)
+         direction: higher_is_better     # or lower_is_better
+         weight: 0.40
+         clip_quantiles: [0.01, 0.99]   # Winsorization bounds
+         transform: log1p                # none|log1p|logit
+         standardize: robust_z           # percentile|robust_z
+         missing_policy: group_median    # drop|group_median|zero
+     penalties:
+       - name: low-registration-rate
+         when: "(metric == 'RegRate%') & (std_value < -1.0)"
+         apply: -30
+     caps:
+       min_score: -200
+       max_score: 1000
+   ```
+
 6. Run Phase 3 commentary to produce automated narratives:
 
    ```bash

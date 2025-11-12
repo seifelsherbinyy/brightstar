@@ -77,19 +77,49 @@ scoring:
   aggregation: mean
   fallback_normalized_value: 0.5
   composite_scale: 1000
+  # Phase 2 Enhanced Configuration
+  rolling_weeks: 8
+  weights_must_sum_to_1: true
   metrics:
     - name: GMS($)
-      weight: 0.4
-      direction: up
+      weight: 0.40
+      direction: higher_is_better
+      clip_quantiles: [0.01, 0.99]
+      transform: log1p
+      standardize: robust_z
+      missing_policy: group_median
     - name: FillRate(%)
-      weight: 0.3
-      direction: up
+      weight: 0.30
+      direction: higher_is_better
+      clip_quantiles: [0.01, 0.99]
+      transform: logit
+      standardize: percentile
+      missing_policy: group_median
     - name: SoROOS(%)
-      weight: 0.2
-      direction: down
+      weight: 0.20
+      direction: lower_is_better
+      clip_quantiles: [0.02, 0.98]
+      transform: none
+      standardize: percentile
+      missing_policy: drop
     - name: ASP($)
-      weight: 0.1
-      direction: up
+      weight: 0.10
+      direction: higher_is_better
+      clip_quantiles: [0.01, 0.99]
+      transform: none
+      standardize: robust_z
+      missing_policy: group_median
+  penalties:
+    - name: low-registration-rate
+      when: "(metric == 'RegRate%') & (std_value < -1.0)"
+      apply: -30
+    - name: chronic-oos
+      when: "(metric == 'SoROOS(%)') & (std_value > 1.5) & (coverage < 0.9)"
+      apply: -25
+  caps:
+    min_score: -200
+    max_score: 1000
+  # Legacy config (kept for backward compatibility with old code paths)
   thresholds:
     excellent: 850
     good: 700
