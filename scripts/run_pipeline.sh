@@ -10,4 +10,4 @@ else
   CONFIG_PATH="${PROJECT_ROOT}/config.yaml"
 fi
 
-python -m src.brightstar_pipeline --config "${CONFIG_PATH}" "$@"
+python -m brightstar.brightstar_pipeline --config "${CONFIG_PATH}" "$@"

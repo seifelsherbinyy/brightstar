@@ -64,7 +64,7 @@ brightstar/
 4. Run Phase 1 ingestion:
 
    ```bash
-   python -m src.phase1_ingestion --config config.yaml
+   python -m brightstar.phase1_ingestion --config config.yaml
    ```
 
    The script prints a phase summary (rows processed, number of weeks, last week ingested), writes a normalized dataset to the
@@ -73,7 +73,7 @@ brightstar/
 5. Run Phase 2 scoring to generate vendor/ASIN scorecards:
 
    ```bash
-   python -m src.phase2_scoring --config config.yaml
+   python -m brightstar.phase2_scoring --config config.yaml
    ```
 
    This reads the normalized dataset, applies the configurable metric weights/directions, and writes CSV/Parquet scorecards plus
@@ -119,7 +119,7 @@ brightstar/
 6. Run Phase 3 commentary to produce automated narratives:
 
    ```bash
-   python -m src.phase3_commentary --config config.yaml
+   python -m brightstar.phase3_commentary --config config.yaml
    ```
 
    The commentary engine compares week-over-week movements, applies the config-driven templates, and writes CSV/Parquet outputs
@@ -128,7 +128,7 @@ brightstar/
 7. Run Phase 4 forecasting to project key metrics and potential gains:
 
    ```bash
-   python -m src.phase4_forecasting --config config.yaml
+   python -m brightstar.phase4_forecasting --config config.yaml
    ```
 
    The forecasting engine loads normalized history, applies the ensemble (Prophet, LSTM, baseline) models per vendor/ASIN, and
@@ -137,7 +137,7 @@ brightstar/
 8. Run Phase 5 dashboard generation to consolidate insights into Excel:
 
    ```bash
-   python -m src.phase5_dashboard --config config.yaml
+   python -m brightstar.phase5_dashboard --config config.yaml
    ```
 
    The dashboard generator loads normalized data, scorecards, commentary, and forecasts, enriches vendor scorecards with linked
@@ -146,7 +146,7 @@ brightstar/
 9. Automate everything with the Phase 6 pipeline (optional when developing, recommended in production):
 
    ```bash
-   python -m src.brightstar_pipeline --config config.yaml
+   python -m brightstar.brightstar_pipeline --config config.yaml
    # or install the package locally and use the console script
    # brightstar-pipeline --config config.yaml --resume
    ```
@@ -176,10 +176,10 @@ sample data and configuration templates.
 After ingestion, following phases calculate scores, run forecasts, and output dashboard workbook. Example:
 
 ```bash
-python -m src.phase2_scoring --config config.yaml
-python -m src.phase3_commentary --config config.yaml
-python -m src.phase4_forecasting --config config.yaml
-python -m src.phase5_dashboard --config config.yaml
+python -m brightstar.phase2_scoring --config config.yaml
+python -m brightstar.phase3_commentary --config config.yaml
+python -m brightstar.phase4_forecasting --config config.yaml
+python -m brightstar.phase5_dashboard --config config.yaml
 ```
 
 Outputs are placed in the `processed_dir` as defined in config. Scorecards are stored under `data/processed/scorecards/`,
@@ -192,7 +192,7 @@ The `brightstar_pipeline` module coordinates every phase with logging, error han
 whenever you need deterministic reproducibility or production scheduling:
 
 ```bash
-python -m src.brightstar_pipeline --config config.yaml --fail-fast
+python -m brightstar.brightstar_pipeline --config config.yaml --fail-fast
 ```
 
 Key flags:

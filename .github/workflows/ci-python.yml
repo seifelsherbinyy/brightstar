@@ -22,4 +22,4 @@ jobs:
       - name: Run pytest
         run: pytest
       - name: Run Brightstar pipeline smoke test
-        run: python -m src.brightstar_pipeline --config config.yaml --resume
+        run: python -m brightstar.brightstar_pipeline --config config.yaml --resume

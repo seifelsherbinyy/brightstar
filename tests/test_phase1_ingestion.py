@@ -10,7 +10,7 @@ import yaml
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.phase1_ingestion import run_phase1
+from brightstar.phase1_ingestion import run_phase1
 
 
 def build_config(tmp_path: Path) -> Path:

@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.phase2_scoring import run_phase2
+from brightstar.phase2_scoring import run_phase2
 
 
 def build_config(tmp_path: Path) -> Path:

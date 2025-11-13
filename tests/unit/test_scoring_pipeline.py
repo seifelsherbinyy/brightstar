@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.scoring.penalties import evaluate_penalties
+from brightstar.scoring.penalties import evaluate_penalties
 
 
 def test_penalty_evaluation_basic():
@@ -133,7 +133,7 @@ def test_penalty_evaluation_empty_dataframe():
 
 def test_schema_validation_missing_columns():
     """Test that missing required columns raises an error."""
-    from src.phase2_scoring import validate_input_schema
+    from brightstar.phase2_scoring import validate_input_schema
     
     # Missing 'metric' column
     df = pd.DataFrame({
@@ -151,7 +151,7 @@ def test_schema_validation_missing_columns():
 
 def test_weight_renormalization():
     """Test that weights are renormalized when they don't sum to 1."""
-    from src.common.config_validator import ScoringConfig, MetricConfig
+    from brightstar.common.config_validator import ScoringConfig, MetricConfig
     
     # Weights sum to 0.9
     config = ScoringConfig(
@@ -172,7 +172,7 @@ def test_weight_renormalization():
 def test_config_validation_invalid_quantiles():
     """Test that invalid quantiles raise validation error."""
     from pydantic import ValidationError
-    from src.common.config_validator import MetricConfig
+    from brightstar.common.config_validator import MetricConfig
     
     # Quantiles in wrong order
     with pytest.raises(ValidationError):
@@ -187,7 +187,7 @@ def test_config_validation_invalid_quantiles():
 def test_config_validation_negative_weight():
     """Test that negative weights raise validation error."""
     from pydantic import ValidationError
-    from src.common.config_validator import MetricConfig
+    from brightstar.common.config_validator import MetricConfig
     
     with pytest.raises(ValidationError):
         MetricConfig(
@@ -260,7 +260,7 @@ def test_reliability_calculation():
         reliability = min(coverage_mean, 1.0) * (1 / (1 + variance))
         return np.clip(reliability, 0, 1)
     
-    reliability = df.groupby('entity_id').apply(calculate_reliability)
+    reliability = df.groupby('entity_id', group_keys=False).apply(calculate_reliability, include_groups=False)
     
     # E1 should have higher reliability than E2
     assert reliability.loc['E1'] > reliability.loc['E2']
@@ -280,7 +280,7 @@ def test_percent_string_handling_in_pipeline():
     })
     
     # Apply parsing
-    from src.scoring.transforms import parse_percent_strings
+    from brightstar.scoring.transforms import parse_percent_strings
     df['value'] = parse_percent_strings(df['value'])
     
     # Should be converted to decimals

@@ -1,9 +1,0 @@
-entity_type,vendor_code,metric,Raw_Value,Normalized_Value,Weight,Weighted_Score,Composite_Score,Performance_Category,Improvement_Flag,Rank_Overall,Rank_By_Metric,Rank_By_Category
-vendor,V1,GMS($),105.0,0.0,0.4,0.0,300.0,Poor,Watch,2.0,2.0,1.0
-vendor,V1,FillRate(%),,0.5,0.3,0.15,300.0,Poor,,2.0,1.0,1.0
-vendor,V1,SoROOS(%),,0.5,0.2,0.1,300.0,Poor,,2.0,1.0,1.0
-vendor,V1,ASP($),,0.5,0.1,0.05,300.0,Poor,,2.0,1.0,1.0
-vendor,V2,GMS($),205.0,1.0,0.4,0.4,700.0,Good,,1.0,1.0,1.0
-vendor,V2,FillRate(%),,0.5,0.3,0.15,700.0,Good,,1.0,1.0,1.0
-vendor,V2,SoROOS(%),,0.5,0.2,0.1,700.0,Good,,1.0,1.0,1.0
-vendor,V2,ASP($),,0.5,0.1,0.05,700.0,Good,,1.0,1.0,1.0

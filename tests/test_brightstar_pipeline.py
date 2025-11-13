@@ -8,7 +8,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.brightstar_pipeline import run_pipeline
+from brightstar.brightstar_pipeline import run_pipeline
 
 
 def _build_config(tmp_path: Path) -> tuple[Path, Path, Path]:
