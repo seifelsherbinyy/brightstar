@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.phase5_dashboard import run_phase5
+from brightstar.phase5_dashboard import run_phase5
 
 
 def _write_dataframe(df: pd.DataFrame, path: Path) -> None:

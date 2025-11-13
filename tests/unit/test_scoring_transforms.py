@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.scoring.transforms import (
+from brightstar.scoring.transforms import (
     apply_direction,
     impute,
     log1p_safe,

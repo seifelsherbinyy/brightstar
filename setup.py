@@ -24,7 +24,7 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "brightstar-pipeline=src.brightstar_pipeline:main",
+            "brightstar-pipeline=brightstar.brightstar_pipeline:main",
         ]
     },
     classifiers=[

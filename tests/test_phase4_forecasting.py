@@ -7,8 +7,8 @@ from typing import Dict
 import pandas as pd
 import pytest
 
-from src.phase4_forecasting import run_phase4
-from src.forecasting_utils import load_metadata
+from brightstar.phase4_forecasting import run_phase4
+from brightstar.forecasting_utils import load_metadata
 
 
 @pytest.fixture(scope="module")

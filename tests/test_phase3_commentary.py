@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.phase3_commentary import run_phase3
+from brightstar.phase3_commentary import run_phase3
 
 
 def _build_config(tmp_path: Path) -> Path:
