@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-11-10T17:43:49.955189+00:00",
+  "timestamp": "2025-11-13T07:43:47.750593+00:00",
   "records_vendor": 8,
   "records_asin": 8,
   "metric_weights": {
@@ -17,9 +17,9 @@
   },
   "output_paths": {
     "vendor_csv": "data/processed/scorecards/vendor_scorecard.csv",
-    "vendor_parquet": null,
+    "vendor_parquet": "data/processed/scorecards/vendor_scorecard.parquet",
     "asin_csv": "data/processed/scorecards/asin_scorecard.csv",
-    "asin_parquet": null,
+    "asin_parquet": "data/processed/scorecards/asin_scorecard.parquet",
     "audit_csv": "data/processed/scorecards/score_audit.csv"
   }
 }
