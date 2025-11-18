@@ -1,0 +1,59 @@
+# Phase 1 Canonical Schema Definition
+# This schema defines the required structure and validation rules for Phase 1 data
+
+required_columns:
+  - vendor_id
+  - asin
+  - week
+  - category
+  - subcategory
+  - gms
+  - ordered_units
+  - shipped_units
+  - asp
+  - cp
+  - cppu
+  - gv
+  - net_ppm
+
+dtypes:
+  vendor_id: string
+  asin: string
+  week: int
+  category: string
+  subcategory: string
+  gms: float
+  ordered_units: float
+  shipped_units: float
+  asp: float
+  cp: float
+  cppu: float
+  gv: float
+  net_ppm: float
+
+categorical_fields:
+  category:
+    - Frozen Food
+    - Baking Supplies
+    - Health Care
+    - Skin Care
+    - Snacks & Desserts
+
+# Validation rules
+validation:
+  non_negative_fields:
+    - gms
+    - ordered_units
+    - shipped_units
+    - asp
+  
+  week_format:
+    pattern: "^\\d{6}$"  # YYYYWW format
+    min_value: 202001
+    max_value: 209952
+  
+  asin_format:
+    pattern: "^[A-Z0-9]{10}$"  # Uppercase alphanumeric, 10 chars
+  
+  vendor_id_format:
+    pattern: "^[A-Z0-9_]+$"  # Uppercase alphanumeric with underscores
