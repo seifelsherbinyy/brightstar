@@ -1,0 +1,5 @@
+entity_type,entity_id,vendor_code,vendor_name,asin,item_name_clean,metric,unit,week_label,week_start_date,fiscal_week,fiscal_year,value,value_flag,source_file,ingestion_run_id,week_raw,week_start,week_end,is_valid_asin,invalid_reason,brand,category,sub_category,pack_size,pack_unit
+asin,V_MASTER_A1,V_MASTER,Vendor One,A1,,Fill Rate 2026,%,2025W01,,,,0.95,,sample.csv,,W36,,,False,ASIN must be 10 alphanumeric chars,,,,,
+asin,V_MASTER_A1,V_MASTER,Vendor One,A1,,GMS,$,2025W36,2025-08-31,,,100.0,,sample.csv,,09/01/2025-09/07/2025,2025-08-31,2025-09-06,False,ASIN must be 10 alphanumeric chars,,,,,
+asin,V_MASTER_A1,V_MASTER,Vendor One,A1,,GMS,$,2025W37,2025-09-07,,,110.0,,sample.csv,,09/08/2025-09/14/2025,2025-09-07,2025-09-13,False,ASIN must be 10 alphanumeric chars,,,,,
+asin,V_MASTER_A1,V_MASTER,Vendor One,A1,,Revenue,,2026W39,2026-09-20,,,120.0,,sample.csv,,09/22/2026-09/28/2026,2026-09-20,2026-09-26,False,ASIN must be 10 alphanumeric chars,,,,,
