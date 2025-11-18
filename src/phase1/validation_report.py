@@ -54,9 +54,11 @@ def generate_validation_report(
     if "is_valid_row" in df.columns:
         report["invalid_row_count"] = int((~df["is_valid_row"]).sum())
         report["valid_row_count"] = int(df["is_valid_row"].sum())
-        report["valid_row_percentage"] = round(
-            100 * report["valid_row_count"] / report["row_count"], 2
-        ) if report["row_count"] > 0 else 0.0
+        report["valid_row_percentage"] = (
+            round(100 * report["valid_row_count"] / report["row_count"], 2)
+            if report["row_count"] > 0
+            else 0.0
+        )
 
     # Count invalid IDs
     if "dq_invalid_ids" in df.columns:
@@ -97,12 +99,16 @@ def generate_validation_report(
         json.dump(report, f, indent=2)
 
     logger.info(f"Validation report written to {output_path}")
-    logger.info(f"Report summary: {report['valid_row_count']}/{report['row_count']} valid rows")
+    logger.info(
+        f"Report summary: {report['valid_row_count']}/{report['row_count']} valid rows"
+    )
 
     return report
 
 
-def generate_summary_statistics(df: pd.DataFrame, numeric_columns: List[str]) -> Dict[str, Any]:
+def generate_summary_statistics(
+    df: pd.DataFrame, numeric_columns: List[str]
+) -> Dict[str, Any]:
     """
     Generate summary statistics for numeric columns.
 
@@ -121,7 +127,13 @@ def generate_summary_statistics(df: pd.DataFrame, numeric_columns: List[str]) ->
 
         data = df[col].dropna()
         if len(data) == 0:
-            stats[col] = {"count": 0, "mean": None, "std": None, "min": None, "max": None}
+            stats[col] = {
+                "count": 0,
+                "mean": None,
+                "std": None,
+                "min": None,
+                "max": None,
+            }
             continue
 
         stats[col] = {
@@ -190,7 +202,9 @@ def write_invalid_rows_report(
 
     # Limit to max_rows
     if len(invalid) > max_rows:
-        logger.warning(f"Limiting invalid rows report to {max_rows} rows (out of {len(invalid)})")
+        logger.warning(
+            f"Limiting invalid rows report to {max_rows} rows (out of {len(invalid)})"
+        )
         invalid = invalid.head(max_rows)
 
     # Write to CSV
@@ -213,7 +227,9 @@ def print_validation_summary(report: Dict[str, Any]) -> None:
     logger.info("=" * 60)
     logger.info(f"Timestamp: {report.get('timestamp', 'N/A')}")
     logger.info(f"Total rows: {report.get('row_count', 0)}")
-    logger.info(f"Valid rows: {report.get('valid_row_count', 0)} ({report.get('valid_row_percentage', 0)}%)")
+    logger.info(
+        f"Valid rows: {report.get('valid_row_count', 0)} ({report.get('valid_row_percentage', 0)}%)"
+    )
     logger.info(f"Invalid rows: {report.get('invalid_row_count', 0)}")
     logger.info(f"Invalid ID rows: {report.get('invalid_id_rows', 0)}")
 

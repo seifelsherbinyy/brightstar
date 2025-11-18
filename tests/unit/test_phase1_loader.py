@@ -6,7 +6,6 @@ and end-to-end loading functionality.
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -37,7 +36,7 @@ from phase1.loader import (
     normalize_column_names,
     normalize_ids,
 )
-from phase1.schema_validator import SchemaValidator, SchemaMismatchError
+from phase1.schema_validator import SchemaValidator
 from phase1.validation_report import generate_validation_report
 
 
@@ -141,9 +140,7 @@ class TestSchemaValidator:
                 "week": "int",
                 "gms": "float",
             },
-            "categorical_fields": {
-                "category": ["Frozen Food", "Baking Supplies"]
-            },
+            "categorical_fields": {"category": ["Frozen Food", "Baking Supplies"]},
             "validation": {
                 "non_negative_fields": ["gms"],
             },
@@ -167,24 +164,24 @@ class TestSchemaValidator:
     def test_validate_required_columns(self, schema_file):
         """Test required column validation."""
         validator = SchemaValidator(str(schema_file))
-        df = pd.DataFrame({
-            "vendor_id": ["V1"],
-            "asin": ["B07XYZ1234"],
-            "week": [202501],
-        })
+        df = pd.DataFrame(
+            {
+                "vendor_id": ["V1"],
+                "asin": ["B07XYZ1234"],
+                "week": [202501],
+            }
+        )
         missing = validator.validate_required_columns(df)
         assert "gms" in missing
 
     def test_validate_categorical(self, schema_file):
         """Test categorical validation."""
         validator = SchemaValidator(str(schema_file))
-        df = pd.DataFrame({
-            "category": ["Frozen Food", "Invalid", "Baking Supplies"]
-        })
+        df = pd.DataFrame({"category": ["Frozen Food", "Invalid", "Baking Supplies"]})
         is_valid = validator.validate_categorical(df, "category")
-        assert is_valid.iloc[0] is True
-        assert is_valid.iloc[1] is False
-        assert is_valid.iloc[2] is True
+        assert is_valid.iloc[0]
+        assert not is_valid.iloc[1]
+        assert is_valid.iloc[2]
 
 
 class TestDQChecks:
@@ -192,46 +189,54 @@ class TestDQChecks:
 
     def test_check_missing_required_columns(self):
         """Test missing required columns check."""
-        df = pd.DataFrame({
-            "vendor_id": ["V1", None, "V3"],
-            "asin": ["A1", "A2", "A3"],
-        })
+        df = pd.DataFrame(
+            {
+                "vendor_id": ["V1", None, "V3"],
+                "asin": ["A1", "A2", "A3"],
+            }
+        )
         missing = check_missing_required_columns(df, ["vendor_id", "asin"])
-        assert missing.iloc[0] is False
-        assert missing.iloc[1] is True
-        assert missing.iloc[2] is False
+        assert not missing.iloc[0]
+        assert missing.iloc[1]
+        assert not missing.iloc[2]
 
     def test_check_invalid_ids(self):
         """Test invalid ID check."""
-        df = pd.DataFrame({
-            "asin": ["B07XYZ1234", "invalid", "0000123456"],
-            "vendor_id": ["V_001", "V_002", "V_003"],
-            "week": [202501, 202502, 999999],
-        })
+        df = pd.DataFrame(
+            {
+                "asin": ["B07XYZ1234", "invalid", "0000123456"],
+                "vendor_id": ["V_001", "V_002", "V_003"],
+                "week": [202501, 202502, 999999],
+            }
+        )
         invalid = check_invalid_ids(df)
-        assert invalid.iloc[0] is False
-        assert invalid.iloc[1] is True  # Invalid ASIN
-        assert invalid.iloc[2] is True  # Invalid week
+        assert not invalid.iloc[0]
+        assert invalid.iloc[1]  # Invalid ASIN
+        assert invalid.iloc[2]  # Invalid week
 
     def test_check_out_of_range(self):
         """Test out of range check."""
-        df = pd.DataFrame({
-            "gms": [100.0, -50.0, 200.0],
-            "asp": [10.0, 5.0, -1.0],
-        })
+        df = pd.DataFrame(
+            {
+                "gms": [100.0, -50.0, 200.0],
+                "asp": [10.0, 5.0, -1.0],
+            }
+        )
         out_of_range = check_out_of_range(df, ["gms", "asp"])
-        assert out_of_range.iloc[0] is False
-        assert out_of_range.iloc[1] is True  # Negative GMS
-        assert out_of_range.iloc[2] is True  # Negative ASP
+        assert not out_of_range.iloc[0]
+        assert out_of_range.iloc[1]  # Negative GMS
+        assert out_of_range.iloc[2]  # Negative ASP
 
     def test_add_data_quality_flags(self):
         """Test adding DQ flags to DataFrame."""
-        df = pd.DataFrame({
-            "vendor_id": ["V_001", "V_002", None],
-            "asin": ["B07XYZ1234", "invalid", "0000123456"],
-            "week": [202501, 202502, 202503],
-            "gms": [100.0, -50.0, 200.0],
-        })
+        df = pd.DataFrame(
+            {
+                "vendor_id": ["V_001", "V_002", None],
+                "asin": ["B07XYZ1234", "invalid", "0000123456"],
+                "week": [202501, 202502, 202503],
+                "gms": [100.0, -50.0, 200.0],
+            }
+        )
         df_flagged = add_data_quality_flags(
             df,
             required_columns=["vendor_id", "asin", "week", "gms"],
@@ -245,19 +250,23 @@ class TestDQChecks:
 
     def test_calculate_null_percentages(self):
         """Test null percentage calculation."""
-        df = pd.DataFrame({
-            "col1": [1, None, 3, None],
-            "col2": [1, 2, 3, 4],
-        })
+        df = pd.DataFrame(
+            {
+                "col1": [1, None, 3, None],
+                "col2": [1, 2, 3, 4],
+            }
+        )
         null_pct = calculate_null_percentages(df)
         assert null_pct["col1"] == 50.0
         assert null_pct["col2"] == 0.0
 
     def test_detect_numeric_outliers(self):
         """Test outlier detection."""
-        df = pd.DataFrame({
-            "value": [1, 2, 3, 4, 5, 100],  # 100 is an outlier
-        })
+        df = pd.DataFrame(
+            {
+                "value": [1, 2, 3, 4, 5, 100],  # 100 is an outlier
+            }
+        )
         outliers = detect_numeric_outliers(df, ["value"], threshold=2.0)
         assert outliers["value"] > 0
 
@@ -275,11 +284,13 @@ class TestLoader:
 
     def test_normalize_column_names(self):
         """Test column name normalization."""
-        df = pd.DataFrame({
-            "Vendor ID": [1],
-            "ASIN ": [2],
-            "Week Label": [3],
-        })
+        df = pd.DataFrame(
+            {
+                "Vendor ID": [1],
+                "ASIN ": [2],
+                "Week Label": [3],
+            }
+        )
         df_norm = normalize_column_names(df)
         assert "vendor_id" in df_norm.columns
         assert "asin" in df_norm.columns
@@ -287,11 +298,13 @@ class TestLoader:
 
     def test_cast_to_schema_types(self):
         """Test type casting."""
-        df = pd.DataFrame({
-            "vendor_id": [1, 2, 3],
-            "week": ["202501", "202502", "202503"],
-            "gms": ["100", "200.5", "300"],
-        })
+        df = pd.DataFrame(
+            {
+                "vendor_id": [1, 2, 3],
+                "week": ["202501", "202502", "202503"],
+                "gms": ["100", "200.5", "300"],
+            }
+        )
         dtype_map = {
             "vendor_id": "string",
             "week": "int",
@@ -304,12 +317,14 @@ class TestLoader:
 
     def test_normalize_ids_dataframe(self):
         """Test ID normalization on DataFrame."""
-        df = pd.DataFrame({
-            "vendor_id": ["v_001", "v_002"],
-            "asin": ["b07xyz1234", "b08abc5678"],
-            "week": [202501, 202502],
-            "category": ["frozen food", "baking supplies"],
-        })
+        df = pd.DataFrame(
+            {
+                "vendor_id": ["v_001", "v_002"],
+                "asin": ["b07xyz1234", "b08abc5678"],
+                "week": [202501, 202502],
+                "category": ["frozen food", "baking supplies"],
+            }
+        )
         df_norm = normalize_ids(df)
         assert df_norm["vendor_id"].iloc[0] == "V_001"
         assert df_norm["asin"].iloc[0] == "B07XYZ1234"
@@ -353,9 +368,19 @@ class TestEndToEnd:
         # Create a test schema if config doesn't exist
         schema = {
             "required_columns": [
-                "vendor_id", "asin", "week", "category", "subcategory",
-                "gms", "ordered_units", "shipped_units", "asp", "cp",
-                "cppu", "gv", "net_ppm"
+                "vendor_id",
+                "asin",
+                "week",
+                "category",
+                "subcategory",
+                "gms",
+                "ordered_units",
+                "shipped_units",
+                "asp",
+                "cp",
+                "cppu",
+                "gv",
+                "net_ppm",
             ],
             "dtypes": {
                 "vendor_id": "string",
@@ -426,16 +451,18 @@ class TestValidationReport:
 
     def test_generate_validation_report(self, tmp_path):
         """Test validation report generation."""
-        df = pd.DataFrame({
-            "vendor_id": ["V_001", "V_002"],
-            "asin": ["B07XYZ1234", "B08ABC5678"],
-            "gms": [1000.0, 2000.0],
-            "is_valid_row": [True, True],
-            "dq_missing_required_columns": [False, False],
-            "dq_invalid_ids": [False, False],
-            "dq_invalid_numeric": [False, False],
-            "dq_out_of_range": [False, False],
-        })
+        df = pd.DataFrame(
+            {
+                "vendor_id": ["V_001", "V_002"],
+                "asin": ["B07XYZ1234", "B08ABC5678"],
+                "gms": [1000.0, 2000.0],
+                "is_valid_row": [True, True],
+                "dq_missing_required_columns": [False, False],
+                "dq_invalid_ids": [False, False],
+                "dq_invalid_numeric": [False, False],
+                "dq_out_of_range": [False, False],
+            }
+        )
 
         report_path = tmp_path / "report.json"
         report = generate_validation_report(

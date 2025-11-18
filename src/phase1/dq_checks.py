@@ -6,7 +6,7 @@ add validation flags, and identify problematic rows.
 """
 
 import logging
-from typing import List, Tuple
+from typing import List
 
 import numpy as np
 import pandas as pd
@@ -67,7 +67,11 @@ def check_invalid_ids(df: pd.DataFrame) -> pd.Series:
     # Check week format
     if "week" in df.columns:
         week_valid = df["week"].apply(
-            lambda x: is_valid_week(int(x)) if pd.notna(x) and isinstance(x, (int, np.integer)) else False
+            lambda x: (
+                is_valid_week(int(x))
+                if pd.notna(x) and isinstance(x, (int, np.integer))
+                else False
+            )
         )
         invalid_mask |= ~week_valid
 
@@ -95,9 +99,7 @@ def check_invalid_numeric(df: pd.DataFrame, numeric_columns: List[str]) -> pd.Se
     return invalid_mask
 
 
-def check_out_of_range(
-    df: pd.DataFrame, non_negative_fields: List[str]
-) -> pd.Series:
+def check_out_of_range(df: pd.DataFrame, non_negative_fields: List[str]) -> pd.Series:
     """
     Flag rows with out-of-range numeric values.
 
@@ -171,10 +173,15 @@ def add_data_quality_flags(
     invalid_numeric = df["dq_invalid_numeric"].sum()
     out_of_range = df["dq_out_of_range"].sum()
 
-    logger.info(f"Data Quality Summary:")
+    logger.info("Data Quality Summary:")
     logger.info(f"  Total rows: {total_rows}")
-    logger.info(f"  Valid rows: {total_rows - invalid_rows} ({100 * (total_rows - invalid_rows) / total_rows:.1f}%)")
-    logger.info(f"  Invalid rows: {invalid_rows} ({100 * invalid_rows / total_rows:.1f}%)")
+    logger.info(
+        f"  Valid rows: {total_rows - invalid_rows} "
+        f"({100 * (total_rows - invalid_rows) / total_rows:.1f}%)"
+    )
+    logger.info(
+        f"  Invalid rows: {invalid_rows} ({100 * invalid_rows / total_rows:.1f}%)"
+    )
     logger.info(f"    - Missing required columns: {missing_required}")
     logger.info(f"    - Invalid IDs: {invalid_ids}")
     logger.info(f"    - Invalid numeric: {invalid_numeric}")
@@ -218,7 +225,9 @@ def calculate_null_percentages(df: pd.DataFrame) -> dict:
 
     for col in df.columns:
         null_count = df[col].isna().sum()
-        null_pct[col] = round(100 * null_count / total_rows, 2) if total_rows > 0 else 0.0
+        null_pct[col] = (
+            round(100 * null_count / total_rows, 2) if total_rows > 0 else 0.0
+        )
 
     return null_pct
 

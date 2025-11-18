@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class SchemaMismatchError(Exception):
     """Raised when data does not match expected schema."""
+
     pass
 
 
@@ -86,9 +87,7 @@ class SchemaValidator:
         categorical = self.schema.get("categorical_fields", {})
         return categorical.get(column)
 
-    def validate_categorical(
-        self, df: pd.DataFrame, column: str
-    ) -> pd.Series:
+    def validate_categorical(self, df: pd.DataFrame, column: str) -> pd.Series:
         """
         Validate categorical column values against schema.
 
@@ -195,17 +194,33 @@ class SchemaValidator:
             if col in df.columns:
                 actual_type = str(df[col].dtype)
                 # Map pandas dtypes to schema types
-                if expected_type == "string" and not actual_type.startswith(("object", "string")):
+                if expected_type == "string" and not actual_type.startswith(
+                    ("object", "string")
+                ):
                     results["dtype_mismatches"].append(
-                        {"column": col, "expected": expected_type, "actual": actual_type}
+                        {
+                            "column": col,
+                            "expected": expected_type,
+                            "actual": actual_type,
+                        }
                     )
                 elif expected_type == "int" and not actual_type.startswith("int"):
                     results["dtype_mismatches"].append(
-                        {"column": col, "expected": expected_type, "actual": actual_type}
+                        {
+                            "column": col,
+                            "expected": expected_type,
+                            "actual": actual_type,
+                        }
                     )
-                elif expected_type == "float" and not actual_type.startswith(("float", "int")):
+                elif expected_type == "float" and not actual_type.startswith(
+                    ("float", "int")
+                ):
                     results["dtype_mismatches"].append(
-                        {"column": col, "expected": expected_type, "actual": actual_type}
+                        {
+                            "column": col,
+                            "expected": expected_type,
+                            "actual": actual_type,
+                        }
                     )
 
         # Check categorical values

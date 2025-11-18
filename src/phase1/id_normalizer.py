@@ -7,7 +7,7 @@ and categories according to BrightStar canonical standards.
 
 import logging
 import re
-from typing import Any, Union
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,11 @@ def normalize_vendor_id(vendor_id: Any) -> str:
     Raises:
         ValueError: If vendor ID cannot be normalized
     """
-    if vendor_id is None or str(vendor_id).strip() == "" or str(vendor_id).lower() == "nan":
+    if (
+        vendor_id is None
+        or str(vendor_id).strip() == ""
+        or str(vendor_id).lower() == "nan"
+    ):
         raise ValueError("Vendor ID cannot be empty or null")
 
     # Convert to string and uppercase
@@ -81,7 +85,9 @@ def normalize_vendor_id(vendor_id: Any) -> str:
     vendor_clean = re.sub(r"[^A-Z0-9_]", "", vendor_str)
 
     if not vendor_clean:
-        raise ValueError(f"Vendor ID '{vendor_id}' has no valid characters after normalization")
+        raise ValueError(
+            f"Vendor ID '{vendor_id}' has no valid characters after normalization"
+        )
 
     return vendor_clean
 
@@ -159,7 +165,11 @@ def normalize_category(category: Any) -> str:
     Raises:
         ValueError: If category cannot be normalized
     """
-    if category is None or str(category).strip() == "" or str(category).lower() == "nan":
+    if (
+        category is None
+        or str(category).strip() == ""
+        or str(category).lower() == "nan"
+    ):
         raise ValueError("Category cannot be empty or null")
 
     # Convert to string, strip, and normalize spacing
@@ -221,8 +231,4 @@ def is_valid_week(week: int) -> bool:
     year = week // 100
     week_num = week % 100
 
-    return (
-        202001 <= week <= 209952
-        and 2020 <= year <= 2099
-        and 1 <= week_num <= 53
-    )
+    return 202001 <= week <= 209952 and 2020 <= year <= 2099 and 1 <= week_num <= 53

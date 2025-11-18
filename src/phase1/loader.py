@@ -7,7 +7,6 @@ schema validation, normalization, and output generation.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -19,7 +18,7 @@ from .id_normalizer import (
     normalize_vendor_id,
     normalize_week,
 )
-from .schema_validator import SchemaValidator, SchemaMismatchError
+from .schema_validator import SchemaValidator
 from .validation_report import (
     generate_validation_report,
     print_validation_summary,
@@ -31,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class IDFormatError(Exception):
     """Raised when ID normalization fails."""
+
     pass
 
 
@@ -118,9 +118,7 @@ def normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def cast_to_schema_types(
-    df: pd.DataFrame, dtype_map: dict
-) -> pd.DataFrame:
+def cast_to_schema_types(df: pd.DataFrame, dtype_map: dict) -> pd.DataFrame:
     """
     Cast columns to schema-specified data types with safe coercion.
 
@@ -264,7 +262,7 @@ def load_phase1(
 
     # Validate schema
     logger.info("Validating schema...")
-    validation_result = validator.validate_schema(df)
+    _ = validator.validate_schema(df)
 
     # Cast to schema types
     logger.info("Casting to schema types...")
