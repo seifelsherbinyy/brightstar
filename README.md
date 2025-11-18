@@ -67,8 +67,32 @@ brightstar/
    python -m brightstar.phase1_ingestion --config config.yaml
    ```
 
-   The script prints a phase summary (rows processed, number of weeks, last week ingested), writes a normalized dataset to the
-   processed directory, and persists an ingestion state JSON for subsequent phases.
+   The script prints a phase summary (rows processed, number of weeks, last week ingested) and writes ALL Phase 1 outputs
+   exclusively to the mandatory directory:
+
+   ```
+   C:\\Users\\selsherb\\Documents\\AVS-E\\CL\\Seif Vendors
+   ```
+
+   Outputs include:
+   - normalized_phase1.parquet (primary)
+   - normalized_phase1.csv (fallback)
+   - normalized_phase1.xlsx (human-friendly view)
+   - ingestion_state.json
+   - unified_calendar_map.csv (if calendar mapping had inconsistencies)
+   - schema_snapshot.json, schema_validation.json
+   - ingestion_audit.json
+   - vendor_summary.csv, asin_summary.csv, week_summary.csv
+   - validation_rows.csv (problematic rows, if any)
+
+   Note: Phase 1 logs are also written to the same directory (phase1_ingestion.log).
+
+   A verification helper script is provided to validate the final dataset:
+
+   ```bash
+   python scripts/verify_phase1.py
+   ```
+   This prints a JSON summary of schema completeness, row count, and uniqueness counts.
 
 5. Run Phase 2 scoring to generate vendor/ASIN scorecards:
 

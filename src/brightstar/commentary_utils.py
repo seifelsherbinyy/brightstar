@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Optional
 import pandas as pd
 
 from .ingestion_utils import ensure_directory, load_config
+from .path_utils import get_phase1_normalized_path
 
 
 LOGGER_NAME = "brightstar.phase3"
@@ -94,8 +95,17 @@ def load_normalized_dataset(config: Dict, logger: Optional[logging.Logger] = Non
     """Load the normalized dataset used for trend analysis."""
 
     commentary_config = config.get("commentary", {})
-    candidate_paths: List[Path] = []
+    # 1) Canonical path from Phase 1 helper
+    try:
+        canonical = get_phase1_normalized_path(config)
+        if canonical.exists():
+            return pd.read_parquet(canonical)
+    except Exception as exc:
+        if logger:
+            logger.debug("Canonical normalized parquet not available yet (%s). Trying fallbacks.", exc)
 
+    # 2) Legacy/config-driven fallbacks
+    candidate_paths: List[Path] = []
     pref = commentary_config.get("normalized_input")
     if pref:
         candidate_paths.append(Path(pref))

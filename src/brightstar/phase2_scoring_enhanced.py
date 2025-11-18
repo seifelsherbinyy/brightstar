@@ -33,6 +33,16 @@ from .scoring.transforms import (
     standardize_robust_z,
     winsorize,
 )
+from .scoring.processing import (
+    add_grain_columns,
+    compute_derived_metrics,
+    add_rolling_features,
+    compute_signal_quality,
+)
+from .scoring.weights import compute_dynamic_weights
+from .scoring.metric_mapping import build_metric_mapping, apply_metric_mapping
+from .standards.naming import normalize_week_label
+from .standards.metrics import resolve_configured_metrics
 
 
 LOGGER_NAME = "brightstar.phase2_scoring"
@@ -145,10 +155,16 @@ def prepare_long_format(df: pd.DataFrame, logger: logging.Logger) -> pd.DataFram
         else:
             df['entity_id'] = df['vendor_code'].astype(str)
     
-    # Ensure Week_Order exists (might be week_label or similar)
+    # Ensure Week_Order exists (prefer deterministic order by YYYYWNN label)
     if 'Week_Order' not in df.columns and 'week_label' in df.columns:
-        # Convert week labels to numeric order
-        df['Week_Order'] = df.groupby('week_label').ngroup() + 1
+        # Determine a stable ordering of weeks by sorted unique labels (YYYYWNN sorts lexicographically)
+        weeks = (
+            df['week_label'].dropna().astype(str).unique().tolist()
+            if 'week_label' in df.columns else []
+        )
+        weeks_sorted = sorted(weeks)
+        week_map = {w: i + 1 for i, w in enumerate(weeks_sorted)}
+        df['Week_Order'] = df['week_label'].map(week_map).astype('Int64')
     
     # Parse percent strings
     df['value'] = parse_percent_strings(df['value'])
@@ -383,9 +399,29 @@ def build_wide_composite(
             logger.warning(f"No data for metric {metric_name}")
             continue
         
-        # Select columns for pivot
-        pivot_df = metric_df[['entity_id', 'vendor_code', 'Week_Order', 'std_value']].copy()
-        pivot_df = pivot_df.rename(columns={'std_value': f'std_{metric_name}'})
+        # Compute contribution using effective per-row weight (already merged in df_long_std)
+        # Fallback to configured static weight if column missing
+        if 'weight' not in metric_df.columns:
+            metric_df['weight'] = float(metric_cfg.weight)
+        metric_df['contrib'] = metric_df['weight'].fillna(float(metric_cfg.weight)) * metric_df['std_value'].fillna(0)
+
+        # Prepare pivot columns: std, contrib, and audit columns for weights
+        pick_cols = ['entity_id', 'vendor_code', 'Week_Order', 'std_value', 'contrib']
+        if 'weight' in metric_df.columns:
+            pick_cols.append('weight')
+        if 'weight_multiplier' in metric_df.columns:
+            pick_cols.append('weight_multiplier')
+        if 'base_weight' in metric_df.columns:
+            pick_cols.append('base_weight')
+
+        pivot_df = metric_df[pick_cols].copy()
+        pivot_df = pivot_df.rename(columns={
+            'std_value': f'std_{metric_name}',
+            'contrib': f'contrib_{metric_name}',
+            'weight': f'weight_{metric_name}',
+            'weight_multiplier': f'weightmul_{metric_name}',
+            'base_weight': f'base_weight_{metric_name}',
+        })
         
         wide_dfs.append(pivot_df)
     
@@ -398,30 +434,12 @@ def build_wide_composite(
     for df in wide_dfs[1:]:
         wide = wide.merge(df, on=['entity_id', 'vendor_code', 'Week_Order'], how='outer')
     
-    # Validate and normalize weights
-    total_weight = sum(m.weight for m in metrics_config)
-    if weights_must_sum_to_1 and not (0.99 <= total_weight <= 1.01):
-        logger.warning(f"Weights sum to {total_weight:.4f}, renormalizing to 1.0")
-        # Normalize weights
-        for m in metrics_config:
-            m.weight = m.weight / total_weight
-    
-    # Compute contributions
+    # Ensure percent contributions are based on existing contrib columns
     wide['score_composite'] = 0.0
-    
     for metric_cfg in metrics_config:
-        metric_name = metric_cfg.name
-        std_col = f'std_{metric_name}'
-        
-        if std_col not in wide.columns:
-            continue
-        
-        # Contribution = weight * std_value
-        contrib_col = f'contrib_{metric_name}'
-        wide[contrib_col] = metric_cfg.weight * wide[std_col].fillna(0)
-        
-        # Add to composite
-        wide['score_composite'] += wide[contrib_col]
+        contrib_col = f'contrib_{metric_cfg.name}'
+        if contrib_col in wide.columns:
+            wide['score_composite'] += wide[contrib_col].fillna(0)
     
     # Compute percent contributions
     for metric_cfg in metrics_config:
@@ -583,17 +601,91 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
     # Load Phase 1 output
     df_input = load_phase1_output(config, logger)
     logger.info(f"Loaded {len(df_input)} rows from Phase 1")
+
+    # Opportunistically enrich with derived metrics before further transforms
+    try:
+        derived_df = compute_derived_metrics(df_input)
+        if not derived_df.empty:
+            df_input = pd.concat([df_input, derived_df], ignore_index=True)
+            logger.info("Added %d derived metric rows (e.g., ASP, CPPU, CP, CM %)", len(derived_df))
+        else:
+            logger.info("No derived metrics could be computed on this input (skipping)")
+    except Exception as ex:
+        logger.warning("Skipping derived metrics due to error: %s", ex)
+
+    # Add grain columns for downstream rollups (non-breaking)
+    try:
+        df_input = add_grain_columns(df_input)
+    except Exception as ex:
+        logger.warning("Failed to add grain columns: %s", ex)
     
     # Prepare long format
     df_long = prepare_long_format(df_input, logger)
     validate_input_schema(df_long)
     logger.info(f"Prepared {len(df_long)} rows in long format")
+
+    # Normalize week_label to YYYYWNN to avoid wrong label variants
+    if 'week_label' in df_long.columns:
+        try:
+            df_long['week_label'] = normalize_week_label(df_long['week_label'])
+        except Exception as ex:
+            logger.warning("Failed to normalize week_label: %s", ex)
+
+    # Map observed metric names to configured canonical names (aliases + heuristics/fuzzy)
+    try:
+        configured_metrics = [m.name for m in scoring_config.metrics]
+        alias_json = Path(config.get("paths", {}).get("metric_aliases_json", Path("data") / "reference" / "metric_aliases.json"))
+        # Resolve configured → available map; we get mapping available->configured
+        available_cols = df_long["metric"].dropna().unique().tolist()
+        resolved_map, resolution_warnings = resolve_configured_metrics(configured_metrics, available_cols, alias_json)
+        for w in resolution_warnings:
+            logger.warning(w)
+        if resolved_map:
+            before_counts = df_long["metric"].value_counts().to_dict()
+            # Build inverse map observed->canonical for series mapping
+            obs_to_canon = dict(resolved_map)
+            df_long["metric"] = df_long["metric"].map(lambda x: obs_to_canon.get(x, x))
+            after_counts = df_long["metric"].value_counts().to_dict()
+            logger.info("Resolved %d metrics via aliases/fuzzy; alias file: %s", len(obs_to_canon), alias_json)
+            logger.debug("Metric counts before mapping: %s", before_counts)
+            logger.debug("Metric counts after mapping: %s", after_counts)
+        else:
+            logger.info("No metric alias/fuzzy mapping applied (no matches)")
+    except Exception as ex:
+        logger.warning("Metric alias mapping skipped due to error: %s", ex)
+
+    # Rolling features and signal quality (optional, augments dataset; does not alter scoring pipeline)
+    try:
+        df_long = add_rolling_features(df_long, window=scoring_config.rolling_weeks)
+        df_long = compute_signal_quality(df_long, lookback_weeks=scoring_config.rolling_weeks)
+    except Exception as ex:
+        logger.warning("Rolling features/signal quality not computed: %s", ex)
     
+    # Forward-fill quality snapshots within each (entity, metric) so all weeks have values
+    if set(["completeness", "recency_weeks", "trend_quality"]).issubset(df_long.columns):
+        df_long[["completeness", "recency_weeks", "trend_quality"]] = (
+            df_long.sort_values(["entity_id", "metric", "Week_Order"]) 
+                   .groupby(["entity_id", "metric"])[["completeness", "recency_weeks", "trend_quality"]]
+                   .ffill()
+        )
+
     # Filter to configured metrics
-    configured_metrics = [m.name for m in scoring_config.metrics]
     df_long = df_long[df_long['metric'].isin(configured_metrics)]
     logger.info(f"Filtered to {len(df_long)} rows for configured metrics: {configured_metrics}")
-    
+
+    # Dynamic weights based on signal quality
+    base_weights = {m.name: float(m.weight) for m in scoring_config.metrics}
+    try:
+        df_weights = compute_dynamic_weights(
+            df_quality=df_long,
+            base_weights_by_metric=base_weights,
+            lookback_weeks=scoring_config.rolling_weeks,
+        )
+        logger.info("Computed dynamic weights for %d rows", len(df_weights))
+    except Exception as ex:
+        logger.warning("Dynamic weights not computed (%s). Falling back to base weights only.", ex)
+        df_weights = pd.DataFrame(columns=["entity_id", "metric", "Week_Order", "weight_effective"])  # empty
+
     # Process each metric through transform pipeline
     processed_metrics = []
     for metric_cfg in scoring_config.metrics:
@@ -609,7 +701,17 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
             scoring_config.rolling_weeks,
             logger
         )
-        processed['weight'] = metric_cfg.weight
+        # Merge dynamic weights (fallback to base weight where missing)
+        if not df_weights.empty:
+            processed = processed.merge(
+                df_weights[["entity_id", "metric", "Week_Order", "weight_effective", "weight_multiplier", "base_weight"]],
+                on=["entity_id", "metric", "Week_Order"],
+                how="left",
+            )
+        processed['weight_effective'] = processed['weight_effective'].fillna(float(metric_cfg.weight))
+        processed['weight_multiplier'] = processed.get('weight_multiplier', pd.Series(index=processed.index, dtype=float)).fillna(1.0)
+        processed['base_weight'] = processed.get('base_weight', pd.Series(index=processed.index, dtype=float)).fillna(float(metric_cfg.weight))
+        processed['weight'] = processed['weight_effective']
         processed_metrics.append(processed)
     
     if not processed_metrics:
@@ -674,8 +776,9 @@ def run_phase2(config_path: str = "config.yaml") -> Dict[str, pd.DataFrame]:
     logger.info("Phase 2 scoring completed successfully")
     
     return {
-        'matrix': df_wide,
-        'scoreboard': df_scoreboard
+        'matrix': df_wide,        # wide matrix with contrib/weights/composite
+        'scoreboard': df_scoreboard,
+        'long': df_long_std,      # long standardized with raw/std and Patch-3 fields
     }
 
 

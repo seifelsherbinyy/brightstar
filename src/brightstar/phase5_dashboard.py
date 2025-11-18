@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 from .dashboard_utils import create_dashboard, setup_logging
+from .logging_utils import log_system_event
 from .ingestion_utils import load_config
 
 
@@ -15,8 +16,16 @@ def run_phase5(config_path: str = "config.yaml") -> Tuple[Path, Dict[str, object
     config = load_config(config_path)
     logger = setup_logging(config)
     logger.info("Starting Phase 5 dashboard build with configuration %s", config_path)
+    try:
+        log_system_event(logger, "Dashboard build started.")
+    except Exception:
+        pass
     output_path, summary = create_dashboard(config, logger)
     logger.info("Dashboard build complete: %s", output_path)
+    try:
+        log_system_event(logger, "Dashboard build completed.")
+    except Exception:
+        pass
     return output_path, summary
 
 

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 import pandas as pd
 
 from .ingestion_utils import (
+    MANDATORY_OUTPUT_DIR,
     apply_master_lookup,
     deduplicate_records,
     detect_metric_column,
@@ -16,6 +18,8 @@ from .ingestion_utils import (
     detect_week_column,
     detect_identifier_column,
     ensure_directory,
+    finalize_weeks,
+    get_timestamped_output_dir,
     load_calendar_map,
     load_master_lookup,
     load_config,
@@ -25,10 +29,22 @@ from .ingestion_utils import (
     read_input_file,
     setup_logging,
     summarize_phase,
+    validate_and_standardize_asins,
     validate_extension,
     write_output,
     write_state,
+    write_phase1_reports,
+    load_product_master,
+    attach_product_master,
+    apply_value_flags,
+    ensure_export_contract,
+    validate_phase1_output,
+    load_masterfile_frame,
+    extract_masterfile_item_names,
 )
+from .logging_utils import log_system_event
+from .path_utils import get_phase1_normalized_path, cleanup_tmp_files
+from .metric_registry_utils import match_to_canonical, metric_variants
 
 
 def resolve_id_columns(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, List[str]]:
@@ -74,7 +90,11 @@ def resolve_id_columns(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, Li
 def ingest_file(path: Path, config: dict, lookup, master_lookup: pd.DataFrame | None = None) -> pd.DataFrame:
     """Normalize a single raw export file."""
 
-    allowed = config["ingestion"].get("allowed_extensions", [".csv", ".xlsx"])
+    # Support a wide set of default extensions if not specified in config
+    allowed = config["ingestion"].get(
+        "allowed_extensions",
+        [".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls"],
+    )
     validate_extension(path, allowed)
     df_raw = read_input_file(path)
     df_raw = normalize_headers(df_raw)
@@ -121,21 +141,54 @@ def gather_input_files(config: dict, explicit: Optional[Iterable[Path]] = None) 
         return [Path(p) for p in explicit]
     raw_dir = Path(config["paths"]["raw_dir"])
     ensure_directory(raw_dir)
-    allowed = {ext.lower() for ext in config["ingestion"].get("allowed_extensions", [])}
+    allowed = {ext.lower() for ext in config["ingestion"].get("allowed_extensions", [".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls"])}
     files = [
         path
         for path in raw_dir.iterdir()
         if path.suffix.lower() in allowed
     ]
-    return sorted(files)
+    # Apply deterministic source file priority if configured
+    priorities: List[str] = config.get("ingestion", {}).get("source_priority", []) or []
+    def prio_key(p: Path) -> tuple[int, str]:
+        name = p.name.lower()
+        # Higher score means higher priority, so that it will be placed later in the list
+        score = 0  # default lowest priority
+        for i, token in enumerate(priorities):
+            if token and token.lower() in name:
+                score = len(priorities) - i
+                break
+        return (score, name)
+    return sorted(files, key=prio_key)
 
 
 def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[str]] = None) -> pd.DataFrame:
     """Execute the ingestion pipeline and return the normalized dataframe."""
 
     config = load_config(config_path)
-    logger = setup_logging(config)
+    # Create timestamped output directory for this run and route all outputs there
+    output_dir = get_timestamped_output_dir()
+    logger = setup_logging(config, output_dir=output_dir)
+    # Safety: clean up stale tmp files in canonical normalized directory
+    try:
+        cleanup_tmp_files(config)
+    except Exception:
+        pass
+    try:
+        log_system_event(logger, "Phase 1 ingestion started.")
+    except Exception:
+        pass
     lookup = load_calendar_map(config["paths"]["calendar_map"])
+    # If a unified calendar was emitted to the base directory during load, copy it into this run folder
+    try:
+        unified_src = MANDATORY_OUTPUT_DIR / "unified_calendar_map.csv"
+        if unified_src.exists():
+            shutil.copyfile(unified_src, output_dir / "unified_calendar_map.csv")
+        # Also copy the updated reference calendar_map.csv used by this run
+        ref_calendar = Path(config["paths"]["calendar_map"])  # after load it should be updated in-place
+        if ref_calendar.exists():
+            shutil.copyfile(ref_calendar, output_dir / "calendar_map.csv")
+    except Exception:
+        pass
     master_lookup = load_master_lookup(
         config["paths"].get("masterfile"),
         config.get("masterfile"),
@@ -164,14 +217,92 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
         frames.append(normalized)
 
     combined = pd.concat(frames, ignore_index=True)
+    # Ensure ASINs are standardized and invalids are exported for debugging
+    combined = validate_and_standardize_asins(combined, output_dir=output_dir)
     combined = deduplicate_records(combined, logger)
+    # Eliminate null/blank week labels; log unresolved cases
+    combined = finalize_weeks(combined, lookup, logger, issues_output=output_dir / "week_parsing_issues.csv")
+
+    # Canonicalize metric names using predefined variant map (pure local logic)
+    try:
+        if not combined.empty and "metric" in combined.columns:
+            before = combined["metric"].astype(str)
+            mapped = before.apply(lambda x: match_to_canonical(x, metric_variants) or x)
+            changes = int((before != mapped).sum())
+            combined["metric"] = mapped
+            if changes:
+                logger.info("Canonicalized %d metric values based on variant map.", changes)
+    except Exception as _exc:
+        # Degrade safely: never interrupt ingestion due to canonicalization
+        logger.warning("Metric canonicalization skipped due to an issue; proceeding with raw metric names.")
+    # Attach Product Master attributes (item_name_clean, brand, category, etc.) for ASIN rows
+    try:
+        pm_df = load_product_master(config)
+        combined = attach_product_master(combined, pm_df)
+    except Exception as _exc:
+        logger.warning("Product Master enrichment skipped due to an issue; proceeding without item attributes.")
+
+    # Phase 1 patch: item_name fallback from Masterfile when product_master missing
+    try:
+        mf_frame = load_masterfile_frame(config)
+        names_df = extract_masterfile_item_names(mf_frame)
+        if not names_df.empty and "asin" in combined.columns:
+            # Left-join on ASIN only, then fill item_name_clean where null for ASIN rows
+            combined = combined.merge(names_df, on="asin", how="left")
+            if "item_name_clean" not in combined.columns:
+                combined["item_name_clean"] = pd.NA
+            asin_mask = combined["asin"].notna() & (combined["asin"].astype(str).str.len() > 0)
+            # Prefer existing product_master value; fill remaining with masterfile name
+            combined.loc[asin_mask, "item_name_clean"] = (
+                combined.loc[asin_mask, "item_name_clean"].where(
+                    combined.loc[asin_mask, "item_name_clean"].notna(),
+                    other=combined.loc[asin_mask, "item_name_master"]
+                )
+            )
+            # Optional: drop helper column to keep schema clean
+            combined.drop(columns=[c for c in ["item_name_master"] if c in combined.columns], inplace=True)
+    except Exception:
+        # Non-fatal; keep pipeline moving
+        pass
+
+    # Apply value flags and enforce export contract
+    try:
+        combined = apply_value_flags(combined, config)
+    except Exception as _exc:
+        logger.warning("Value casting/flagging skipped due to an issue; proceeding with raw values.")
+
+    try:
+        combined = ensure_export_contract(combined)
+    except Exception as _exc:
+        logger.warning("Export contract enforcement skipped; proceeding with current columns.")
     combined.sort_values(
         ["vendor_code", "vendor_name", "asin", "metric", "week_start", "week_label"],
         inplace=True,
     )
 
-    output_path = write_output(combined, config, logger)
+    # Best-effort validation prior to export (non-fatal)
+    try:
+        validate_phase1_output(combined, logger)
+    except Exception:
+        pass
+
+    output_path = write_output(combined, config, logger, output_dir=output_dir)
     logger.info("Normalized dataset written to %s", output_path)
+
+    # Canonical normalized location under output_root with atomic replace
+    try:
+        canonical_path = get_phase1_normalized_path(config)
+        tmp_path = canonical_path.with_suffix(".tmp.parquet")
+        combined.to_parquet(tmp_path, index=False)
+        tmp_path.replace(canonical_path)
+        logger.info("Phase 1 wrote normalized output to canonical path: %s", canonical_path.resolve())
+    except Exception as _exc:
+        logger.warning("Failed to persist canonical normalized parquet; downstream phases may not find it.")
+
+    # Write validation and summary artifacts
+    report_paths = write_phase1_reports(combined, logger, output_dir=output_dir)
+    for key, rpath in report_paths.items():
+        logger.info("Wrote %s to %s", key, rpath)
 
     metadata = {
         "records": int(len(combined)),
@@ -182,8 +313,9 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
         if not combined.empty
         else None,
         "output_path": str(output_path),
+        "output_dir": str(output_dir),
     }
-    write_state(metadata, config)
+    write_state(metadata, config, output_dir=output_dir)
 
     template = config.get("summary", {}).get(
         "template", "Processed {total_rows} rows across {unique_weeks} weeks. Last week: {last_week}."
@@ -192,6 +324,38 @@ def run_phase1(config_path: str = "config.yaml", input_files: Optional[Iterable[
     if config.get("summary", {}).get("enabled", True):
         print(summary)
     logger.info(summary)
+
+    # Ingestion diagnostics summary file in logs
+    try:
+        logs_dir = ensure_directory(config["paths"]["logs_dir"])
+        run_id = output_dir.name
+        diag_path = logs_dir / f"ingestion_{run_id}.txt"
+        metrics_detected = int(combined["metric"].nunique()) if not combined.empty and "metric" in combined.columns else 0
+        unmapped_weeks = int(combined["week_start_date"].isna().sum()) if "week_start_date" in combined.columns else 0
+        new_metrics_msg = "N/A"
+        try:
+            # heuristic: metrics not in canonical list length vs unique
+            from .metric_registry_utils import canonical_metrics
+            new_count = len(set(map(str, combined.get("metric", pd.Series(dtype=str)).dropna().unique())) - set(canonical_metrics))
+            new_metrics_msg = str(new_count)
+        except Exception:
+            pass
+        lines = [
+            f"Files processed: {len(file_paths)}",
+            f"Rows processed: {len(combined)}",
+            f"Metrics detected: {metrics_detected}",
+            f"New metrics detected (approx): {new_metrics_msg}",
+            f"Unmapped week labels: {unmapped_weeks}",
+            f"Output: {output_path}",
+        ]
+        diag_path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("Wrote ingestion diagnostics to %s", diag_path)
+    except Exception:
+        pass
+    try:
+        log_system_event(logger, "Phase 1 ingestion completed.")
+    except Exception:
+        pass
     return combined
 
 

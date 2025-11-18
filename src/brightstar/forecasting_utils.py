@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .ingestion_utils import ensure_directory, load_config
+from .path_utils import get_phase1_normalized_path
 
 
 LOGGER_NAME = "brightstar.phase4"
@@ -29,6 +30,192 @@ class ForecastContext:
     uncertainty_buffer: float
     accuracy_backtest: int
     risk_gain_thresholds: Dict[str, float]
+
+
+# =============================
+# Topic 4: Simple, offline forecasting helpers
+# =============================
+
+def build_time_series(
+    normalized_df: pd.DataFrame,
+    metric_list: Sequence[str],
+    min_history_weeks: int,
+) -> pd.DataFrame:
+    """Build tidy weekly time series per entity and metric.
+
+    Input is normalized Phase 1 data with columns at least:
+      vendor_code, asin (optional), metric, value, week_start
+
+    Returns a DataFrame with columns:
+      entity_type, entity_id, vendor_code, asin, metric, week_start_date, value, history_weeks
+
+    Entities with fewer than ``min_history_weeks`` non-null observations are dropped.
+    The function is empty-safe and will return an empty DataFrame on missing input.
+    """
+
+    if normalized_df is None or normalized_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "entity_type",
+                "entity_id",
+                "vendor_code",
+                "asin",
+                "metric",
+                "week_start_date",
+                "value",
+                "history_weeks",
+            ]
+        )
+
+    df = normalized_df.copy()
+    # Coerce date
+    if "week_start" not in df.columns:
+        # Try common alternatives; if not found, return empty
+        for cand in ("Week_Start", "week_label", "Week_Label"):
+            if cand in df.columns:
+                if cand.lower().endswith("label"):
+                    # Best effort: parse label as date start
+                    df["week_start"] = pd.to_datetime(df[cand], errors="coerce")
+                else:
+                    df["week_start"] = pd.to_datetime(df[cand], errors="coerce")
+                break
+    df["week_start"] = pd.to_datetime(df.get("week_start"), errors="coerce")
+    if "week_start" not in df.columns or df["week_start"].isna().all():
+        return pd.DataFrame(
+            columns=[
+                "entity_type",
+                "entity_id",
+                "vendor_code",
+                "asin",
+                "metric",
+                "week_start_date",
+                "value",
+                "history_weeks",
+            ]
+        )
+
+    # Filter metrics
+    metrics = set(map(str, metric_list or []))
+    if metrics:
+        df = df[df["metric"].astype(str).isin(metrics)]
+
+    # Ensure identifiers
+    if "asin" not in df.columns:
+        df["asin"] = pd.NA
+
+    # Build vendor-level series
+    vendor = (
+        df.groupby(["vendor_code", "metric", "week_start"], as_index=False)["value"].mean()
+        .assign(entity_type="vendor", asin=pd.NA)
+        .rename(columns={"week_start": "week_start_date"})
+    )
+    vendor["entity_id"] = vendor["vendor_code"].astype(str)
+
+    # Build ASIN-level series (only rows with asin present)
+    asin_df = df.dropna(subset=["asin"]).copy()
+    asin = (
+        asin_df.groupby(["vendor_code", "asin", "metric", "week_start"], as_index=False)["value"].mean()
+        .assign(entity_type="asin")
+        .rename(columns={"week_start": "week_start_date"})
+    )
+    asin["entity_id"] = asin["vendor_code"].astype(str) + "_" + asin["asin"].astype(str)
+
+    combined = pd.concat([vendor, asin], ignore_index=True, sort=False)
+    if combined.empty:
+        return combined.assign(history_weeks=pd.Series(dtype=int))
+
+    # Compute history count per series and filter
+    combined.sort_values(["entity_type", "entity_id", "metric", "week_start_date"], inplace=True)
+    counts = (
+        combined.groupby(["entity_type", "entity_id", "metric"])['value']
+        .apply(lambda s: s.dropna().shape[0])
+        .reset_index(name="history_weeks")
+    )
+    combined = combined.merge(counts, on=["entity_type", "entity_id", "metric"], how="left")
+    if min_history_weeks and int(min_history_weeks) > 0:
+        combined = combined[combined["history_weeks"] >= int(min_history_weeks)]
+    return combined.reset_index(drop=True)
+
+
+def apply_exp_smoothing(series: pd.DataFrame, horizons_weeks: Sequence[int]) -> pd.DataFrame:
+    """Apply a very simple exponential smoothing to a single series.
+
+    Expects ``series`` columns: week_start_date, value, entity_type, entity_id, vendor_code, asin, metric.
+    Produces one row per requested horizon with columns:
+      entity_type, entity_id, vendor_code, asin, metric,
+      forecast_week, forecast_value, forecast_horizon_weeks, method_name
+    """
+
+    if series is None or series.empty:
+        return pd.DataFrame(
+            columns=[
+                "entity_type",
+                "entity_id",
+                "vendor_code",
+                "asin",
+                "metric",
+                "forecast_week",
+                "forecast_value",
+                "forecast_horizon_weeks",
+                "method_name",
+            ]
+        )
+
+    s = series.sort_values("week_start_date").copy()
+    values = pd.to_numeric(s["value"], errors="coerce")
+    # Fixed alpha for transparency; avoids auto-tuning
+    alpha = 0.3
+    # EWM: last smoothed value as level
+    smoothed = values.ewm(alpha=alpha, adjust=False).mean()
+    level = float(smoothed.iloc[-1]) if not smoothed.empty else float(values.iloc[-1])
+    # Naive drift using last 4 deltas
+    deltas = values.diff().dropna()
+    drift = float(deltas.tail(4).mean()) if not deltas.empty else 0.0
+
+    last_week = pd.to_datetime(s["week_start_date"].iloc[-1])
+    out_rows: List[Dict[str, object]] = []
+    for h in sorted(set(int(x) for x in horizons_weeks if int(x) > 0)):
+        forecast_week = last_week + pd.to_timedelta(7 * h, unit="D")
+        forecast_value = level + drift * h
+        out_rows.append(
+            {
+                "entity_type": s["entity_type"].iloc[0],
+                "entity_id": s["entity_id"].iloc[0],
+                "vendor_code": s["vendor_code"].iloc[0],
+                "asin": s.get("asin", pd.Series([pd.NA])).iloc[0],
+                "metric": s["metric"].iloc[0],
+                "forecast_week": forecast_week,
+                "forecast_value": float(forecast_value),
+                "forecast_horizon_weeks": int(h),
+                "method_name": "exp_smoothing_v1",
+            }
+        )
+
+    return pd.DataFrame(out_rows)
+
+
+def estimate_reliability(series: pd.DataFrame, residuals: Optional[pd.Series] = None) -> str:
+    """Estimate a simple reliability label based on history length and volatility.
+
+    Rules (transparent, hand-crafted):
+      - history >= 52 and coefvar <= 0.2 -> high
+      - history >= 24 and coefvar <= 0.35 -> medium
+      - else -> low
+    """
+    if series is None or series.empty:
+        return "low"
+
+    values = pd.to_numeric(series["value"], errors="coerce").dropna()
+    n = int(series.get("history_weeks", pd.Series([len(values)])).iloc[0]) if not series.empty else len(values)
+    mean = float(values.mean()) if len(values) > 0 else 0.0
+    std = float(values.std(ddof=0)) if len(values) > 1 else 0.0
+    coefvar = (std / mean) if mean else 1.0
+
+    if n >= 52 and coefvar <= 0.2:
+        return "high"
+    if n >= 24 and coefvar <= 0.35:
+        return "medium"
+    return "low"
 
 
 def setup_logging(config: Dict) -> logging.Logger:
@@ -63,8 +250,17 @@ def load_normalized_dataset(config: Dict, logger: Optional[logging.Logger] = Non
     """Load the normalized dataset created during Phase 1."""
 
     forecasting_config = config.get("forecasting", {})
-    candidate_paths: List[Path] = []
+    # 1) Canonical path from Phase 1 helper
+    try:
+        canonical = get_phase1_normalized_path(config)
+        if canonical.exists():
+            return pd.read_parquet(canonical)
+    except Exception as exc:
+        if logger:
+            logger.debug("Canonical normalized parquet not available yet (%s). Trying fallbacks.", exc)
 
+    # 2) Legacy/config-driven fallbacks
+    candidate_paths: List[Path] = []
     preferred = forecasting_config.get("normalized_input")
     if preferred:
         candidate_paths.append(Path(preferred))
@@ -153,7 +349,8 @@ def prepare_entity_frames(normalized_df: pd.DataFrame, entity_type: str) -> pd.D
     """Aggregate normalized data into time series per entity and metric."""
 
     frame = normalized_df.copy()
-    frame["week_start"] = pd.to_datetime(frame["week_start"])  # ensure datetime handling
+    # Tolerant parsing: allow various date formats without raising
+    frame["week_start"] = pd.to_datetime(frame["week_start"], errors="coerce")  # ensure datetime handling
 
     if entity_type == "vendor":
         grouped = (

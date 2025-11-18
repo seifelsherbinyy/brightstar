@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
@@ -13,7 +13,7 @@ logger = logging.getLogger("brightstar.scoring.penalties")
 
 def evaluate_penalties(
     df_long_std: pd.DataFrame,
-    rules: List[Dict]
+    rules: List[Any]
 ) -> Tuple[pd.Series, pd.Series]:
     """
     Evaluate penalty rules and return total penalties and breakdown.
@@ -45,10 +45,16 @@ def evaluate_penalties(
     df['_penalty_list'] = [[] for _ in range(len(df))]
     
     # Evaluate each rule
+    def _field(r: Any, key: str, default: Any = None) -> Any:
+        # Support both dict-like and object-like rules (e.g., Pydantic models)
+        if isinstance(r, dict):
+            return r.get(key, default)
+        return getattr(r, key, default)
+
     for rule in rules:
-        rule_name = rule.get('name', 'unnamed')
-        when_condition = rule.get('when', '')
-        penalty_value = float(rule.get('apply', 0))
+        rule_name = _field(rule, 'name', 'unnamed')
+        when_condition = _field(rule, 'when', '')
+        penalty_value = float(_field(rule, 'apply', 0))
         
         if not when_condition:
             logger.warning(f"Penalty rule '{rule_name}' has no 'when' condition, skipping")

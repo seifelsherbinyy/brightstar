@@ -1,7 +1,1 @@
 entity_type,vendor_code,asin,metric,forecast_week,forecast_value,lower_bound,upper_bound,last_observed_week,last_observed_value,potential_gain,history_weeks,week_offset,forecast_horizon_weeks,delta_value,delta_pct,risk_gain_flag,Forecast_Risk_Flag,methods,status
-asin,V1,A1,GMS($),2025-10-06,150.0,122.5,177.5,2025-09-08,110.0,40.0,2,4,4,40.0,0.36363636363636365,high_performing,4,fallback,"fallback,insufficient_history"
-asin,V1,A1,GMS($),2025-10-20,170.0,139.5,200.5,2025-09-08,110.0,60.0,2,6,6,60.0,0.5454545454545454,high_performing,4,fallback,"fallback,insufficient_history"
-asin,V1,A1,GMS($),2025-12-01,230.0,190.5,269.5,2025-09-08,110.0,120.0,2,12,12,120.0,1.0909090909090908,high_performing,4,fallback,"fallback,insufficient_history"
-asin,V2,A2,GMS($),2025-10-06,250.0,207.5,292.5,2025-09-08,210.0,40.0,2,4,4,40.0,0.19047619047619047,high_performing,4,fallback,"fallback,insufficient_history"
-asin,V2,A2,GMS($),2025-10-20,270.0,224.5,315.5,2025-09-08,210.0,60.0,2,6,6,60.0,0.2857142857142857,high_performing,4,fallback,"fallback,insufficient_history"
-asin,V2,A2,GMS($),2025-12-01,330.0,275.5,384.5,2025-09-08,210.0,120.0,2,12,12,120.0,0.5714285714285714,high_performing,4,fallback,"fallback,insufficient_history"

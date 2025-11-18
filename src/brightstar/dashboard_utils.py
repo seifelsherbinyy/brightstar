@@ -9,11 +9,19 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.formatting.rule import ColorScaleRule, IconSetRule
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.formatting.rule import ColorScaleRule, IconSetRule, DataBarRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .ingestion_utils import ensure_directory, load_config
+from .scoring_utils import (
+    build_asin_l4w_aggregates,
+    add_asin_growth_segment,
+    build_asin_dashboard_df,
+    prepare_vendor_scoring_dashboard_df,
+    prepare_asin_scoring_dashboard_df,
+)
 
 
 LOGGER_NAME = "brightstar.phase5"
@@ -29,6 +37,7 @@ class DashboardData:
     commentary: pd.DataFrame
     forecast_vendor: pd.DataFrame
     forecast_asin: pd.DataFrame
+    forecast_health: pd.DataFrame | None = None
 
 
 def setup_logging(config: Dict) -> logging.Logger:
@@ -144,6 +153,17 @@ def load_processed_tables(config: Dict, logger: Optional[logging.Logger] = None)
         logger=logger,
     )
 
+    # Optional: load evaluation health summary (Phase 6)
+    eval_cfg = config.get("evaluation", {})
+    eval_dir = Path(eval_cfg.get("output_dir", "outputs/forecast_evaluation"))
+    health_df = _load_dataframe(
+        _candidate_paths(
+            eval_dir / "health_summary.parquet",
+            eval_dir / "health_summary.csv",
+        ),
+        logger=logger,
+    )
+
     return DashboardData(
         normalized=normalized,
         vendor_scorecard=vendor_scorecard,
@@ -151,6 +171,7 @@ def load_processed_tables(config: Dict, logger: Optional[logging.Logger] = None)
         commentary=commentary,
         forecast_vendor=forecast_vendor,
         forecast_asin=forecast_asin,
+        forecast_health=health_df if not health_df.empty else pd.DataFrame(),
     )
 
 
@@ -407,6 +428,82 @@ def _apply_icon_sets(ws, formatting: Dict) -> None:
             percent=bool(config.get("percent", False)),
         )
         ws.conditional_formatting.add(cell_range, rule)
+        logging.getLogger(LOGGER_NAME).info(
+            "Applied icon set '%s' to column '%s' on sheet '%s'",
+            icon_style,
+            column_name,
+            ws.title,
+        )
+
+
+def _apply_segment_colors(ws, formatting: Dict, column_name: str = "Asin_Growth_Segment") -> None:
+    """Apply fill colors to the ASIN segment column using a config map."""
+    headers = [cell.value for cell in ws[1]]
+    if column_name not in headers:
+        return
+    col_idx = headers.index(column_name)
+    seg_map = formatting.get("segment_fills", {}) or {
+        "Breakout": "C6EFCE",  # green
+        "Emerging": "E2F0D9",  # light green
+        "Core": "D9E1F2",      # light blue
+        "Squeezed": "FFF2CC",  # amber
+        "Sunset": "FCE4D6",    # red tint
+        "Low_Data": "EEEEEE",   # gray
+        "default": "FFFFFF",
+    }
+    default_fill = PatternFill("solid", fgColor=seg_map.get("default", "FFFFFF"))
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        cell = row[col_idx]
+        key = str(cell.value) if cell.value is not None else ""
+        color = seg_map.get(key, default_fill.fgColor if default_fill else "FFFFFF")
+        cell.fill = PatternFill("solid", fgColor=color)
+
+
+def _apply_databars(ws, column_name: str, color: str = "63BE7B") -> None:
+    """Apply Excel data bars to a given numeric column."""
+    headers = [cell.value for cell in ws[1]]
+    if column_name not in headers:
+        return
+    col_idx = headers.index(column_name) + 1
+    start_row = 2
+    end_row = ws.max_row
+    if end_row < start_row:
+        return
+    cell_range = f"{get_column_letter(col_idx)}{start_row}:{get_column_letter(col_idx)}{end_row}"
+    rule = DataBarRule(start_type="min", end_type="max", color=color, showValue=True)
+    ws.conditional_formatting.add(cell_range, rule)
+
+
+def _apply_color_scale(ws, column_name: str, formatting: Dict, defaults: Dict[str, float | str] | None = None) -> None:
+    """Apply a 3-color scale to a given column using dashboard score_color_scale defaults."""
+    headers = [cell.value for cell in ws[1]]
+    if column_name not in headers:
+        return
+    idx = headers.index(column_name) + 1
+    max_row = ws.max_row
+    if max_row < 2:
+        return
+    start_color = formatting.get("score_color_scale", {}).get("start_color", (defaults or {}).get("start_color", "F8696B"))
+    mid_color = formatting.get("score_color_scale", {}).get("mid_color", (defaults or {}).get("mid_color", "FFEB84"))
+    end_color = formatting.get("score_color_scale", {}).get("end_color", (defaults or {}).get("end_color", "63BE7B"))
+    mid_value = float((defaults or {}).get("mid_value", 0))
+    end_value = float((defaults or {}).get("end_value", 1))
+    cell_range = f"{get_column_letter(idx)}2:{get_column_letter(idx)}{max_row}"
+    rule = ColorScaleRule(
+        start_type="num", start_value=0, start_color=start_color,
+        mid_type="num", mid_value=mid_value, mid_color=mid_color,
+        end_type="num", end_value=end_value, end_color=end_color,
+    )
+    ws.conditional_formatting.add(cell_range, rule)
+
+
+def _apply_header_band(ws, columns: List[str], color_hex: str) -> None:
+    """Apply a header fill color to a set of header columns by name."""
+    headers = [cell.value for cell in ws[1]]
+    fill = PatternFill("solid", fgColor=color_hex)
+    for idx, name in enumerate(headers, start=1):
+        if name in columns:
+            ws.cell(row=1, column=idx).fill = fill
 
 
 def _write_dataframe(ws, df: pd.DataFrame, formatting: Dict) -> None:
@@ -439,10 +536,14 @@ def _write_dataframe(ws, df: pd.DataFrame, formatting: Dict) -> None:
     for _, row in df.iterrows():
         values: List[object] = []
         for value in row.tolist():
-            if isinstance(value, float) and pd.isna(value):
-                values.append(None)
-            else:
-                values.append(value)
+            # Convert any pandas NA/NaN to None for openpyxl
+            try:
+                if pd.isna(value):
+                    values.append(None)
+                    continue
+            except Exception:
+                pass
+            values.append(value)
         ws.append(values)
 
     _apply_header_style(ws, formatting)
@@ -465,6 +566,38 @@ def _write_dataframe(ws, df: pd.DataFrame, formatting: Dict) -> None:
     _apply_commentary_fills(ws, formatting)
     _apply_icon_sets(ws, formatting)
 
+    # Convert used range to an Excel Table for filterable, user-friendly sheets
+    try:
+        if ws.max_row >= 2 and ws.max_column >= 1:
+            table_name_base = "".join(ch if ch.isalnum() else "_" for ch in ws.title)
+            table_name = f"{table_name_base}_Table"
+            # Ensure unique name within workbook
+            existing = {t.displayName for t in ws.parent._tables}
+            suffix = 1
+            while table_name in existing:
+                table_name = f"{table_name_base}_Table_{suffix}"
+                suffix += 1
+
+            ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+            table = Table(displayName=table_name, ref=ref)
+            style_name = formatting.get("table_style", "TableStyleMedium2")
+            table.tableStyleInfo = TableStyleInfo(
+                name=style_name,
+                showFirstColumn=False,
+                showLastColumn=False,
+                showRowStripes=True,
+                showColumnStripes=False,
+            )
+            ws.add_table(table)
+            logging.getLogger(LOGGER_NAME).info(
+                "Created Excel table '%s' on sheet '%s' with range %s",
+                table_name,
+                ws.title,
+                ref,
+            )
+    except Exception as exc:  # pragma: no cover - defensive; table creation best-effort
+        logging.getLogger(LOGGER_NAME).warning("Failed to create Excel table on sheet '%s': %s", ws.title, exc)
+
 
 def _create_summary_sheet(ws, data: DashboardData, summary_config: Dict) -> Dict[str, object]:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -484,11 +617,25 @@ def _create_summary_sheet(ws, data: DashboardData, summary_config: Dict) -> Dict
     else:
         highest_gain = 0.0
 
+    history_start = "Unknown"
+    history_end = "Unknown"
+    vendors_recent_n = None
+    recent_weeks = int(summary_config.get("recent_weeks", 12))
+
     if not data.normalized.empty and "week_start" in data.normalized.columns:
         normalized = data.normalized.copy()
         normalized["week_start"] = pd.to_datetime(normalized["week_start"], errors="coerce")
         latest_week = normalized["week_start"].max()
+        earliest_week = normalized["week_start"].min()
         freshness = latest_week.strftime("%Y-%m-%d") if pd.notna(latest_week) else "Unknown"
+        history_start = earliest_week.strftime("%Y-%m-%d") if pd.notna(earliest_week) else "Unknown"
+        history_end = freshness
+
+        # Compute vendors with data in the most recent N weeks
+        if pd.notna(latest_week) and "vendor_code" in normalized.columns:
+            cutoff = latest_week - pd.Timedelta(weeks=recent_weeks)
+            recent = normalized[normalized["week_start"] >= cutoff]
+            vendors_recent_n = int(recent["vendor_code"].nunique())
     else:
         freshness = "Unknown"
 
@@ -499,7 +646,13 @@ def _create_summary_sheet(ws, data: DashboardData, summary_config: Dict) -> Dict
         "Top Vendor Score": top_score,
         "Highest Forecast Gain": highest_gain,
         "Data Freshness": freshness,
+        "History Start": history_start,
+        "History End": history_end,
+        "Recent Window (weeks)": recent_weeks,
     }
+
+    if vendors_recent_n is not None:
+        summary["Vendors Active in Recent Window"] = vendors_recent_n
 
     ws.title = summary_config.get("summary", "Summary")
     ws.append(["Brightstar Dashboard Summary"])
@@ -534,14 +687,105 @@ def create_dashboard(config: Dict, logger: logging.Logger) -> Tuple[Path, Dict[s
     asin_enriched = _enrich_scorecard(data.asin_scorecard, data.commentary, data.forecast_asin, "asin")
 
     commentary_combined = data.commentary.copy()
-    forecasts_combined = pd.concat(
-        [data.forecast_vendor.assign(table="vendor"), data.forecast_asin.assign(table="asin")],
-        ignore_index=True,
-    ) if not data.forecast_vendor.empty or not data.forecast_asin.empty else pd.DataFrame()
+
+    # Build Forecasts sheet: ensure stable schema and filter-friendly columns
+    if not data.forecast_vendor.empty or not data.forecast_asin.empty:
+        fv = data.forecast_vendor.copy()
+        fa = data.forecast_asin.copy()
+
+        # Standardize common columns
+        def _standardize_forecast(df: pd.DataFrame, entity_type: str) -> pd.DataFrame:
+            if df.empty:
+                return df
+            out = df.copy()
+            out["entity_type"] = entity_type
+            # Normalize date and value columns
+            if "forecast_week_start_date" not in out.columns:
+                for cand in ["week_start", "forecast_week_start", "date", "forecast_date"]:
+                    if cand in out.columns:
+                        out.rename(columns={cand: "forecast_week_start_date"}, inplace=True)
+                        break
+            if "forecast_value" not in out.columns:
+                for cand in ["forecast", "value", "yhat", "prediction"]:
+                    if cand in out.columns:
+                        out.rename(columns={cand: "forecast_value"}, inplace=True)
+                        break
+            # Ensure identifier columns exist
+            for col in ["vendor_code", "asin", "metric"]:
+                if col not in out.columns:
+                    out[col] = pd.NA
+            # Ensure risk/delta/horizon columns
+            rename_map = {
+                "forecast_horizon_weeks": "Forecast_Horizon_Weeks",
+                "risk_gain_flag": "Forecast_Risk_Label",
+                "Forecast_Risk": "Forecast_Risk_Flag",
+                "delta_value": "Forecast_Delta_Value",
+                "delta_pct": "Forecast_Delta_Pct",
+            }
+            out.rename(columns=rename_map, inplace=True)
+            for c in [
+                "Forecast_Horizon_Weeks",
+                "Forecast_Risk_Flag",
+                "Forecast_Risk_Label",
+                "Forecast_Delta_Value",
+                "Forecast_Delta_Pct",
+            ]:
+                if c not in out.columns:
+                    out[c] = pd.NA
+            return out
+
+        fv_std = _standardize_forecast(fv, "vendor") if not fv.empty else pd.DataFrame()
+        fa_std = _standardize_forecast(fa, "asin") if not fa.empty else pd.DataFrame()
+
+        forecasts_combined = pd.concat([fv_std, fa_std], ignore_index=True)
+        # Reorder/limit columns to a stable set
+        desired_cols = [
+            "entity_type",
+            "vendor_code",
+            "asin",
+            "metric",
+            "forecast_week_start_date",
+            "forecast_value",
+            "Forecast_Horizon_Weeks",
+            "Forecast_Risk_Flag",
+            "Forecast_Risk_Label",
+            "Forecast_Delta_Value",
+            "Forecast_Delta_Pct",
+        ]
+        for c in desired_cols:
+            if c not in forecasts_combined.columns:
+                forecasts_combined[c] = pd.NA
+        forecasts_combined = forecasts_combined[desired_cols]
+        logger.info(
+            "Forecasts sheet built with %d rows and %d columns",
+            len(forecasts_combined),
+            len(forecasts_combined.columns),
+        )
+    else:
+        forecasts_combined = pd.DataFrame(
+            columns=[
+                "entity_type",
+                "vendor_code",
+                "asin",
+                "metric",
+                "forecast_week_start_date",
+                "forecast_value",
+                "Forecast_Horizon_Weeks",
+                "Forecast_Risk_Flag",
+                "Forecast_Risk_Label",
+                "Forecast_Delta_Value",
+                "Forecast_Delta_Pct",
+            ]
+        )
 
     workbook = Workbook()
     default_sheet = workbook.active
-    summary_stats = _create_summary_sheet(default_sheet, data, {**sheet_names, **formatting})
+    # Pass dashboard scope config including recent_weeks and formatting to summary
+    summary_stats = _create_summary_sheet(
+        default_sheet,
+        data,
+        {**dashboard_config, **sheet_names, **formatting},
+    )
 
     sheet_mapping = {
         sheet_names.get("vendor_scorecard", "Vendor Scorecards"): vendor_enriched,
@@ -550,14 +794,117 @@ def create_dashboard(config: Dict, logger: logging.Logger) -> Tuple[Path, Dict[s
         sheet_names.get("forecasts", "Forecasts"): forecasts_combined,
     }
 
+    # Build ASIN Growth sheet (precompute upstream; empty-safe)
+    try:
+        asin_l4w = build_asin_l4w_aggregates(data.normalized, config) if not data.normalized.empty else pd.DataFrame()
+        if not asin_l4w.empty:
+            asin_seg = add_asin_growth_segment(asin_l4w, config)
+            asin_growth_df = build_asin_dashboard_df(asin_seg, data.forecast_asin, data.forecast_health, config)
+        else:
+            asin_growth_df = build_asin_dashboard_df(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), config)
+        asin_growth_sheet_name = sheet_names.get("asin_growth", "ASIN_Growth")
+        sheet_mapping[asin_growth_sheet_name] = asin_growth_df
+    except Exception as exc:
+        logger.warning("ASIN Growth sheet construction failed; creating empty sheet. (%s)", exc)
+        asin_growth_sheet_name = sheet_names.get("asin_growth", "ASIN_Growth")
+        sheet_mapping[asin_growth_sheet_name] = build_asin_dashboard_df(pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), config)
+
+    # Optional Forecast Health sheet
+    health_sheet_name = sheet_names.get("forecast_health", "Forecast Health")
+    if hasattr(data, "forecast_health") and isinstance(data.forecast_health, pd.DataFrame) and not data.forecast_health.empty:
+        sheet_mapping[health_sheet_name] = data.forecast_health.copy()
+
+    # ------------------------------------------------------------------
+    # New: Vendor & ASIN Scoring dashboard sheets (current-period KPIs)
+    # ------------------------------------------------------------------
+    scoring_cfg = dashboard_config.get("scoring", {})
+    vendor_scoring_name = scoring_cfg.get("vendor_sheet_name", "Vendor_Scoring")
+    asin_scoring_name = scoring_cfg.get("asin_sheet_name", "ASIN_Scoring")
+    try:
+        vendor_scoring_df = prepare_vendor_scoring_dashboard_df(config, data.vendor_scorecard, data.normalized)
+    except Exception as exc:
+        logger.warning("Vendor scoring DF build failed (%s); creating empty sheet.", exc)
+        vendor_scoring_df = pd.DataFrame()
+    try:
+        asin_scoring_df = prepare_asin_scoring_dashboard_df(config, data.asin_scorecard, data.normalized)
+    except Exception as exc:
+        logger.warning("ASIN scoring DF build failed (%s); creating empty sheet.", exc)
+        asin_scoring_df = pd.DataFrame()
+    sheet_mapping[vendor_scoring_name] = vendor_scoring_df
+    sheet_mapping[asin_scoring_name] = asin_scoring_df
+
     for title, frame in sheet_mapping.items():
         ws = workbook.create_sheet(title=title)
         _write_dataframe(ws, frame, formatting)
+        logger.info("Sheet '%s' written with %d rows, %d cols", title, len(frame), len(frame.columns) if not frame.empty else 0)
+        # Extra formatting for ASIN Growth sheet
+        if title == asin_growth_sheet_name:
+            try:
+                # Freeze panes after Category (i.e., next col)
+                headers = list(frame.columns) if not frame.empty else [cell.value for cell in ws[1]]
+                if "Category" in headers:
+                    cat_idx = headers.index("Category") + 1
+                    ws.freeze_panes = f"{get_column_letter(cat_idx + 1)}2"
+                # Segment colors and data bars
+                _apply_segment_colors(ws, formatting, column_name="Asin_Growth_Segment")
+                _apply_databars(ws, "Product_GMS_L4W", color=formatting.get("databar_color", "63BE7B"))
+                # Color scales for growth delta and net margin
+                _apply_color_scale(ws, "GMS_Delta_Pct", formatting, defaults={"mid_value": 0, "end_value": 0.2})
+                _apply_color_scale(ws, "Net_Margin", formatting, defaults={"mid_value": 0, "end_value": 0.2})
+            except Exception as exc:
+                logger.warning("ASIN Growth sheet formatting partially skipped: %s", exc)
+        # Formatting for Vendor/ASIN Scoring sheets
+        if title in {vendor_scoring_name, asin_scoring_name}:
+            try:
+                # Freeze panes after identity columns
+                headers = list(frame.columns) if not frame.empty else [cell.value for cell in ws[1]]
+                id_cols = ["vendor_code", "vendor_name"] + (["asin", "Item_Name"] if title == asin_scoring_name else [])
+                last_id_idx = max((headers.index(c) + 1 for c in id_cols if c in headers), default=2)
+                ws.freeze_panes = f"{get_column_letter(last_id_idx + 1)}2"
+
+                # Header bands per requirement (config-driven with safe defaults)
+                identity_color = formatting.get("identity_header_fill", "EDEDED")  # light gray
+                scores_color = formatting.get("scores_header_fill", "BDD7EE")      # blue tint
+                margin_color = formatting.get("margin_header_fill", "FCE4D6")      # orange tint
+                avail_color = formatting.get("availability_header_fill", "E4DFEC")  # purple tint
+
+                score_cols = [c for c in ["Composite_Score", "Sales_Score", "Margin_Score", "Availability_Score", "Traffic_Score"] if c in headers]
+                margin_cols = [c for c in ["Net_PPM"] if c in headers]
+                avail_cols = [c for c in ["SoROOS", "Fill_Rate_Sourceable", "Vendor_Confirmation_Rate_Sourceable", "On_Hand_Inventory_Units_Sellable", "Total_Inventory_Units"] if c in headers]
+
+                _apply_header_band(ws, [c for c in headers if c in id_cols], identity_color)
+                _apply_header_band(ws, score_cols, scores_color)
+                _apply_header_band(ws, margin_cols, margin_color)
+                _apply_header_band(ws, avail_cols, avail_color)
+
+                # Color scales
+                _apply_color_scale(ws, "Composite_Score", formatting, defaults={"mid_value": 700, "end_value": 950})
+                # Margin color scale
+                _apply_color_scale(ws, "Net_PPM", formatting, defaults={"mid_value": 0, "end_value": 0.2})
+                # Availability icon set (SoROOS traffic lights), prefer dashboard.scoring.availability_icon_set
+                avail_icon = scoring_cfg.get("availability_icon_set")
+                if avail_icon and "column" in avail_icon:
+                    _apply_icon_sets(ws, {"icon_sets": [avail_icon]})
+            except Exception as exc:
+                logger.warning("Scoring sheet formatting partially skipped for '%s': %s", title, exc)
 
     if "Sheet" in workbook.sheetnames:
         workbook.remove(workbook["Sheet"])
 
-    ordered_names = dashboard_config.get("sheet_order") or workbook.sheetnames
+    default_order = [
+        sheet_names.get("summary", "Summary"),
+        sheet_names.get("vendor_scorecard", "Vendor Scorecards"),
+        sheet_names.get("asin_scorecard", "ASIN Scorecards"),
+        vendor_scoring_name,
+        asin_scoring_name,
+        asin_growth_sheet_name,
+        sheet_names.get("commentary", "Commentary"),
+        sheet_names.get("forecasts", "Forecasts"),
+    ]
+    # If Forecast Health present and not explicitly ordered, append it to the end
+    if health_sheet_name in sheet_mapping and health_sheet_name not in default_order:
+        default_order.append(health_sheet_name)
+    ordered_names = dashboard_config.get("sheet_order") or default_order
     workbook._sheets = [workbook[name] for name in ordered_names if name in workbook.sheetnames] + [
         ws for ws in workbook.worksheets if ws.title not in ordered_names
     ]
