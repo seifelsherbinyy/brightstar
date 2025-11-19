@@ -1,0 +1,1 @@
+entity_type,entity_id,vendor_code,vendor_name,asin,item_name_clean,metric,unit,week_label,week_start_date,fiscal_week,fiscal_year,value,value_flag,source_file,ingestion_run_id,week_raw,week_start,week_end,is_valid_asin,invalid_reason,brand,category,sub_category,pack_size,pack_unit

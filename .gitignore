@@ -210,3 +210,10 @@ __marimo__/
 data/raw/
 data/processed/
 logs/
+
+# Windows-specific output paths (Phase 1 outputs)
+C:\Users\selsherb\Documents\AVS-E\CL\Seif Vendors/
+
+# Phase 1 output directories
+output/
+unified_calendar_map.csv
