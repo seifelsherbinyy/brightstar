@@ -1,0 +1,9 @@
+source_file,vendor_code,vendor_name,asin,asin_clean,invalid_reason
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars
+sample.csv,V_MASTER,Vendor One,A1,A1,ASIN must be 10 alphanumeric chars

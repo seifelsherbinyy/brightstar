@@ -1,0 +1,9 @@
+{
+  "records": 4,
+  "vendors": 1,
+  "asins": 1,
+  "weeks": 4,
+  "last_week": "2025W01",
+  "output_path": "C:\\Users\\selsherb\\Documents\\AVS-E\\CL\\Seif Vendors/phase1_outputs_2025-11-18_23-46-55/normalized_phase1.parquet",
+  "output_dir": "C:\\Users\\selsherb\\Documents\\AVS-E\\CL\\Seif Vendors/phase1_outputs_2025-11-18_23-46-55"
+}

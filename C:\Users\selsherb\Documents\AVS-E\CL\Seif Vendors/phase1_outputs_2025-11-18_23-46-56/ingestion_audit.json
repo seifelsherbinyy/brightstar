@@ -1,0 +1,23 @@
+{
+  "total_rows": 4,
+  "by_source_file": [
+    {
+      "source_file": "sample.csv",
+      "rows": 4
+    }
+  ],
+  "by_metric": [
+    {
+      "metric": "Fill Rate 2026",
+      "rows": 1
+    },
+    {
+      "metric": "GMS",
+      "rows": 2
+    },
+    {
+      "metric": "Revenue",
+      "rows": 1
+    }
+  ]
+}
