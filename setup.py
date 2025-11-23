@@ -25,6 +25,7 @@ setup(
     entry_points={
         "console_scripts": [
             "brightstar-pipeline=brightstar.brightstar_pipeline:main",
+            "brightstar-run12=brightstar.pipeline.run_sessions12:main",
         ]
     },
     classifiers=[

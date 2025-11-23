@@ -1,234 +1,236 @@
-"""
-ID normalization and canonicalization functions for Phase 1 data.
+from __future__ import annotations
 
-This module provides functions to normalize vendor IDs, ASINs, weeks,
-and categories according to BrightStar canonical standards.
-"""
-
-import logging
 import re
-from typing import Any
+from typing import Any, Set
+from pathlib import Path
+import yaml
 
-logger = logging.getLogger(__name__)
+import pandas as pd
 
 
-def normalize_asin(asin: Any) -> str:
+ASIN_PATTERN = re.compile(r"[^A-Z0-9]+")
+ASIN_FULL_RX = re.compile(r"^[A-Z0-9]{10}$")
+VENDOR_ID_RX = re.compile(r"^[A-Z0-9][A-Z0-9\-]{1,31}$")  # permissive: 2-32 chars alnum/dash
+_VENDOR_SET: Set[str] | None = None
+
+
+def normalize_asin(x: Any) -> str:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    s = str(x).strip().upper()
+    return ASIN_PATTERN.sub("", s)
+
+
+def normalize_vendor_id(x: Any) -> str:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    return str(x).strip().upper()
+
+
+def _parse_week_like(text: str) -> tuple[int | None, int | None]:
+    """Try parsing various week label patterns into (year, week).
+
+    Supports formats like: 2025W36, 202536, 2025-36, W36 2025, 36 2025, etc.
+    Returns (None, None) when not parseable.
     """
-    Normalize ASIN to canonical format.
 
-    Rules:
-    - Convert to uppercase
-    - Remove hyphens, spaces, and special characters
-    - Keep only alphanumeric characters
-    - Must be 10 characters (pad with zeros if shorter, truncate if longer)
+    s = str(text).strip().upper()
+    if not s:
+        return None, None
 
-    Args:
-        asin: Raw ASIN value (can be string, number, or None)
+    # 2025W36 or 2025-W36
+    m = re.match(r"^(20\d{2})\s*-?W\s*(\d{1,2})$", s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
 
-    Returns:
-        Normalized ASIN string in canonical format
+    # 202536 or 2025-36 or 2025 36
+    m = re.match(r"^(20\d{2})[\s\-_/]*(\d{1,2})$", s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
 
-    Raises:
-        ValueError: If ASIN cannot be normalized
+    # W36 2025 or 36W2025
+    m = re.match(r"^W?\s*(\d{1,2})[\sW\-_/]*(20\d{2})$", s)
+    if m:
+        return int(m.group(2)), int(m.group(1))
+
+    return None, None
+
+
+def normalize_week(x: Any) -> int:
+    """Normalize week identifier to integer YYYYWW.
+
+    If parsing fails, returns 0.
     """
-    if asin is None or str(asin).strip() == "" or str(asin).lower() == "nan":
-        raise ValueError("ASIN cannot be empty or null")
 
-    # Convert to string and uppercase
-    asin_str = str(asin).upper().strip()
-
-    # Remove hyphens, spaces, and keep only alphanumeric
-    asin_clean = re.sub(r"[^A-Z0-9]", "", asin_str)
-
-    if not asin_clean:
-        raise ValueError(f"ASIN '{asin}' has no valid characters after normalization")
-
-    # Ensure 10 characters (standard ASIN length)
-    if len(asin_clean) < 10:
-        asin_clean = asin_clean.zfill(10)
-    elif len(asin_clean) > 10:
-        logger.warning(f"ASIN '{asin}' longer than 10 chars, truncating to first 10")
-        asin_clean = asin_clean[:10]
-
-    return asin_clean
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return 0
+    if isinstance(x, (int, pd.IntegerDtype)):
+        return int(x)
+    s = str(x).strip()
+    # If already like 202536 -> int
+    if re.fullmatch(r"20\d{2}\d{2}", s):
+        return int(s)
+    year, week = _parse_week_like(s)
+    if year is None or week is None:
+        return 0
+    week = max(1, min(53, int(week)))
+    return int(f"{year}{week:02d}")
 
 
-def normalize_vendor_id(vendor_id: Any) -> str:
+def normalize_category(x: Any) -> str:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    return str(x).strip().title()
+
+
+def is_valid_asin(x: Any) -> bool:
+    """Return True if value looks like a canonical ASIN: 10 uppercase alphanumerics.
+
+    Whitespace is stripped and letters uppercased before validation.
     """
-    Normalize vendor ID to canonical format.
 
-    Rules:
-    - Convert to uppercase
-    - Remove spaces and special characters (except underscores)
-    - Keep only alphanumeric and underscores
-
-    Args:
-        vendor_id: Raw vendor ID value
-
-    Returns:
-        Normalized vendor ID string
-
-    Raises:
-        ValueError: If vendor ID cannot be normalized
-    """
-    if (
-        vendor_id is None
-        or str(vendor_id).strip() == ""
-        or str(vendor_id).lower() == "nan"
-    ):
-        raise ValueError("Vendor ID cannot be empty or null")
-
-    # Convert to string and uppercase
-    vendor_str = str(vendor_id).upper().strip()
-
-    # Remove spaces and special chars, keep alphanumeric and underscores
-    vendor_clean = re.sub(r"[^A-Z0-9_]", "", vendor_str)
-
-    if not vendor_clean:
-        raise ValueError(
-            f"Vendor ID '{vendor_id}' has no valid characters after normalization"
-        )
-
-    return vendor_clean
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return False
+    s = str(x).strip().upper()
+    return bool(ASIN_FULL_RX.fullmatch(s))
 
 
-def normalize_week(week: Any) -> int:
-    """
-    Normalize week to canonical YYYYWW integer format.
+def _load_vendor_set() -> Set[str]:
+    global _VENDOR_SET
+    if _VENDOR_SET is not None:
+        return _VENDOR_SET
 
-    Rules:
-    - Convert to integer
-    - Must be in YYYYWW format (6 digits)
-    - Year must be between 2020 and 2099
-    - Week must be between 01 and 53
-
-    Args:
-        week: Raw week value (can be int, string, or float)
-
-    Returns:
-        Normalized week as integer in YYYYWW format
-
-    Raises:
-        ValueError: If week cannot be normalized or is invalid
-    """
-    if week is None or str(week).strip() == "" or str(week).lower() == "nan":
-        raise ValueError("Week cannot be empty or null")
-
+    # Load dim_vendor via config/dimension_paths.yaml
+    dim_paths_cfg = Path("config") / "dimension_paths.yaml"
+    vendors: Set[str] = set()
     try:
-        # Convert to string, remove any non-digits
-        week_str = str(week).strip()
-        week_str = re.sub(r"[^0-9]", "", week_str)
+        if dim_paths_cfg.exists():
+            with open(dim_paths_cfg, "r", encoding="utf-8") as f:
+                dp = yaml.safe_load(f) or {}
+            root = Path(dp.get("default_output_root", "C:\\Users\\selsherb\\Documents\\AVS-E\\CL\\Brightlight\\dimensions"))
+            fn = (dp.get("files", {}) or {}).get("dim_vendor")
+            if fn:
+                p = root / fn
+                if p.exists():
+                    df = pd.read_parquet(p)
+                    col = None
+                    for c in df.columns:
+                        if str(c).strip().lower() == "vendor_id":
+                            col = c
+                            break
+                    if col:
+                        vendors = set(df[col].astype("string").str.strip().str.upper().dropna().tolist())
+    except Exception:
+        # Fallback to empty set on any IO error
+        vendors = set()
 
-        if not week_str:
-            raise ValueError(f"Week '{week}' has no digits")
-
-        # Convert to integer
-        week_int = int(week_str)
-
-        # Validate YYYYWW format (6 digits)
-        if week_int < 100000 or week_int > 999999:
-            raise ValueError(f"Week '{week}' must be 6 digits (YYYYWW format)")
-
-        # Extract year and week components
-        year = week_int // 100
-        week_num = week_int % 100
-
-        # Validate year range
-        if year < 2020 or year > 2099:
-            raise ValueError(f"Year {year} must be between 2020 and 2099")
-
-        # Validate week number
-        if week_num < 1 or week_num > 53:
-            raise ValueError(f"Week number {week_num} must be between 01 and 53")
-
-        return week_int
-
-    except (TypeError, ValueError) as e:
-        raise ValueError(f"Cannot normalize week '{week}': {str(e)}")
+    _VENDOR_SET = vendors
+    return _VENDOR_SET
 
 
-def normalize_category(category: Any) -> str:
+def is_valid_vendor_id(x: Any) -> bool:
+    """Return True if the value is a plausible vendor_id.
+
+    Backward-compatible rules:
+      - Primary: membership in dim_vendor set → valid.
+      - Otherwise: passes a permissive alphanumeric/dash regex (2–32 chars) → valid.
     """
-    Normalize category to canonical format.
 
-    Rules:
-    - Convert to title case
-    - Strip leading/trailing whitespace
-    - Normalize internal spacing
-
-    Args:
-        category: Raw category value
-
-    Returns:
-        Normalized category string in title case
-
-    Raises:
-        ValueError: If category cannot be normalized
-    """
-    if (
-        category is None
-        or str(category).strip() == ""
-        or str(category).lower() == "nan"
-    ):
-        raise ValueError("Category cannot be empty or null")
-
-    # Convert to string, strip, and normalize spacing
-    category_str = str(category).strip()
-    category_str = re.sub(r"\s+", " ", category_str)
-
-    # Convert to title case
-    category_clean = category_str.title()
-
-    if not category_clean:
-        raise ValueError(f"Category '{category}' has no valid characters")
-
-    return category_clean
-
-
-def is_valid_asin(asin: str) -> bool:
-    """
-    Check if ASIN is in valid format after normalization.
-
-    Args:
-        asin: Normalized ASIN string
-
-    Returns:
-        True if valid, False otherwise
-    """
-    if not asin or len(asin) != 10:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
         return False
-    return bool(re.match(r"^[A-Z0-9]{10}$", asin))
-
-
-def is_valid_vendor_id(vendor_id: str) -> bool:
-    """
-    Check if vendor ID is in valid format after normalization.
-
-    Args:
-        vendor_id: Normalized vendor ID string
-
-    Returns:
-        True if valid, False otherwise
-    """
-    if not vendor_id:
+    s = str(x).strip().upper()
+    if not s:
         return False
-    return bool(re.match(r"^[A-Z0-9_]+$", vendor_id))
+    vendors = _load_vendor_set()
+    if s in vendors:
+        return True
+    return bool(VENDOR_ID_RX.fullmatch(s))
 
 
-def is_valid_week(week: int) -> bool:
+def _collapse_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def normalize_brand(x: Any) -> str:
+    """Normalize brand name for Phase 1 ingestion.
+
+    - Trim and collapse whitespace
+    - Normalize dashes
+    - Preserve natural casing (no forced title-case)
     """
-    Check if week is in valid YYYYWW format.
 
-    Args:
-        week: Normalized week integer
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    s = str(x).replace("\u2013", "-").replace("\u2014", "-")
+    s = _collapse_ws(s)
+    return s
 
-    Returns:
-        True if valid, False otherwise
+
+def normalize_item_name(x: Any) -> str:
+    """Normalize item name for Phase 1 ingestion.
+
+    - Trim and collapse whitespace
+    - Normalize unicode dashes and quotes
+    - Remove control characters
+    - Preserve natural casing
     """
-    if not isinstance(week, int):
-        return False
 
-    year = week // 100
-    week_num = week % 100
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    s = str(x)
+    s = s.replace("\u2013", "-").replace("\u2014", "-")
+    s = s.replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+    # Remove control characters
+    s = re.sub(r"[\x00-\x1F\x7F]", " ", s)
+    s = _collapse_ws(s)
+    return s
 
-    return 202001 <= week <= 209952 and 2020 <= year <= 2099 and 1 <= week_num <= 53
+
+def detect_misplaced_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect misplaced IDs between asin_id and vendor_id.
+
+    Flags dq_misplaced_id when:
+      - asin_id fails ASIN pattern AND asin_id exists in vendor list, OR
+      - vendor_id looks like an ASIN (10 uppercase alphanumerics).
+    Returns a copy with 'dq_misplaced_id' boolean column added (default False).
+    """
+
+    res = df.copy()
+    vendors = _load_vendor_set()
+    asin_col = "asin_id" if "asin_id" in res.columns else ("asin" if "asin" in res.columns else None)
+    if asin_col is None:
+        res["dq_misplaced_id"] = False
+        return res
+
+    asin_series = res[asin_col].astype("string").str.strip().str.upper()
+    vendor_series = res.get("vendor_id", pd.Series(["" for _ in range(len(res))], index=res.index)).astype("string").str.strip().str.upper()
+
+    asin_is_valid = asin_series.map(lambda s: bool(ASIN_FULL_RX.fullmatch(s)))
+    asin_in_vendor = asin_series.isin(vendors) if vendors else pd.Series(False, index=res.index)
+    vendor_looks_asin = vendor_series.map(lambda s: bool(ASIN_FULL_RX.fullmatch(s)))
+
+    res["dq_misplaced_id"] = (~asin_is_valid & asin_in_vendor) | vendor_looks_asin
+    return res
+
+
+def quarantine_misplaced_ids(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+    """Write dq_misplaced_id rows to phase1_id_issues.csv and set is_valid_row=False for them.
+
+    Returns a modified copy of df.
+    """
+
+    res = df.copy()
+    issues = res[res.get("dq_misplaced_id", False) == True]  # noqa: E712
+    try:
+        out_path = Path(output_dir) / "phase1_id_issues.csv"
+        if not issues.empty:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            issues.to_csv(out_path, index=False, encoding="utf-8-sig")
+    except Exception:
+        # best-effort; do not fail pipeline here
+        pass
+
+    if "is_valid_row" not in res.columns:
+        res["is_valid_row"] = True
+    res.loc[res.get("dq_misplaced_id", False) == True, "is_valid_row"] = False  # noqa: E712
+    return res

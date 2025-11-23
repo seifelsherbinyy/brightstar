@@ -1,383 +1,539 @@
-"""Utilities for BrightStar metric registry management.
-
-This module provides minimal, offline-compatible helpers to:
-  - Load the metric registry
-  - Detect unseen metrics from normalized Phase 1 output
-  - Append pending metrics for manual curation
-  - Canonicalize metrics using a predefined list + variant mapping
-
-All functions are designed to be safe to call even when files are missing,
-always returning a valid result without raising under normal conditions.
-"""
-from __future__ import annotations
-
-from pathlib import Path
-from typing import List, Dict, Sequence, Optional
-
-import logging
-import pandas as pd
-
-
-BRIGHTSTAR_LOGGER = logging.getLogger("brightstar")
-
-
-REGISTRY_COLUMNS = [
-    "metric_name",
-    "display_name",
-    "unit",
-    "direction",
-    "category",
-    "forecastable",
-    # Extended descriptive fields (optional; filled during bootstrap)
-    "description",
-    "keywords",
-]
-
-
 # ============================================================
 # Canonical metrics, variants, descriptions (Topic: Safe Canonical Registry)
 # ============================================================
 
 canonical_metrics: Sequence[str] = [
-    "ASP",
-    "Amzn_GV",
-    "CCOGS_As_A_Percent_Of_Revenue",
-    "CM",
-    "CP",
-    "CPPU",
-    "Customer_Returns",
-    "Deal_GMS",
-    "Fill_Rate_Sourceable",
+    # Demand / Traffic
     "GV",
+    "Amzn_GV",
+    "Page_Views",
+    "Sessions",
+    "Unique_Sessions",
+    "Conversion_Rate",
+    "Add_To_Cart_Rate",
+    "Traffic_Share",
+    "Traffic_Index",
+    "Organic_Traffic_Share",
+    "Sponsored_Traffic_Share",
+    "Search_Impressions",
+    "Search_Conversion_Rate",
+    "Page_View_Growth_WoW",
+    "Traffic_Growth_WoW",
+    "Bounce_Rate",
+    "Dwell_Time",
+    "Engagement_Index",
+    "Multi_Buy_Conversion",
+    "Detail_Page_Views_Mobile",
+    "Detail_Page_Views_Desktop",
+    "Subscribe_And_Save_Views",
+    "Traffic_Seasonality_Index",
+    "Traffic_Share_Category_Top10",
+    "ASIN_Unique_Visitor_Count",
+
+    # Sales
     "Net_Ordered_GMS",
     "Net_Ordered_Units",
-    "Net_PPM",
-    "Net_Shipped_Units",
-    "On_Hand_Inventory_Units_Sellable",
-    "PCOGS",
-    "PPM",
     "Product_GMS",
-    "SoROOS",
+    "Deal_GMS",
+    "Shipped_Revenue",
+    "Ordered_Revenue",
+    "ASP",
+    "Discounted_ASP",
+    "Promo_Units",
+    "New_ASIN_Sales",
+    "Returning_Customer_Sales",
+    "Sales_Per_Visit",
+    "GMS_Growth_WoW",
+    "Units_Growth_WoW",
+    "Orders_Per_1000_GV",
+    "Basket_Size",
+    "Shipped_Unit_Growth",
+    "Subscription_Sales_GMS",
+    "First_Time_Buyer_Sales",
+    "Marketplace_Share",
+    "Sales_Volatility_Index",
+    "Average_Order_Value",
+    "Purchased_By_Business_Customer",
+    "Net_Shipped_Units",
+    "Growth_Contribution_Index",
+
+    # Pricing / Buy Box
+    "Featured_Offer_Percentage",
+    "Buy_Box_Win_Rate",
+    "Pricing_Competitiveness_Index",
+    "MAP_Violation_Flag",
+    "External_Match_Revenue",
+    "Price_Drop_Pct",
+    "Historical_Price_Index",
+    "Discount_Depth",
+    "Promo_Frequency",
+    "Buy_Box_Lost_To_3P",
+    "Price_Revenue_Impact",
+    "Price_Elasticity_Proxy",
+    "List_Price",
+    "MSRP",
+    "Price_Parity_Violation",
+    "Sale_Price",
+    "Offer_Price_Index",
+    "Buy_Box_Interaction_Rate",
+
+    # Profitability
+    "CP",
+    "CPPU",
+    "CM",
+    "PPM",
+    "Net_PPM",
+    "PCOGS",
+    "CCOGS_As_A_Percent_Of_Revenue",
+    "Gross_Margin_Rate",
+    "Net_Margin_Rate",
+    "Contra_Uplift_Amount",
+    "Contra_Uplift_Rate",
+    "Contra_Agreement_Count",
+    "Contra_Expiring_Soon",
+    "Margin_Drop_Risk",
+    "Profit_Stability_Index",
+    "Vendor_Funding_Reliance",
+    "Promo_Margin_Impact",
+    "Shipping_Cost_Per_Unit",
+    "Cost_Increase_Flag",
+    "Margin_Recovery_Index",
+
+    # Quality / Returns
+    "Customer_Returns",
+    "Return_Rate",
+    "Refund_Rate",
+    "Damage_Rate",
+    "Quality_Defect_Rate",
+    "Negative_Contact_Rate",
+    "Returns_Unit_Ratio",
+    "Returns_GMS_Impact",
+    "Replacement_Unit_Rate",
+    "Quality_Score",
+    "Late_Return_Ratio",
+    "Customer_Dissatisfaction_Index",
+
+    # Inventory
+    "On_Hand_Inventory_Units_Sellable",
     "Total_Inventory_Units",
+    "Reserved_Units",
+    "AFN_Inventory_Units",
+    "MFN_Inventory_Units",
+    "FC_Sellable_Units",
+    "FC_Reserved_Units",
+    "FC_Count",
+    "Demand_Coverage_Days",
+    "HCPO_Present",
+    "LCPO_Only",
+    "Node_Inventory_Imbalance",
+    "Inventory_Risk_Flag",
+    "Overstock_Flag",
+    "OOS_Risk_Probability",
+    "Inventory_Health_Score",
+    "Excess_Rate",
+    "Aging_Inventory_Units",
+    "Net_Receipts_Units",
+    "Sellable_Stock_Ratio",
+    "Safety_Stock_Level",
+    "Unfulfillable_Units",
+    "Inbound_Transit_Units",
+    "Lost_Units_Flag",
+    "Net_Inventory_Value",
+
+    # Availability / Operations
+    "SoROOS",
+    "Fill_Rate_Sourceable",
     "Vendor_Confirmation_Rate_Sourceable",
+    "Buyability_Flag",
+    "Listing_Blocked",
+    "Suppressed_From_Website",
+    "No_Retail_Offer",
+    "No_Inventory_Offer",
+    "Compliance_Block_Flag",
+    "Hazmat_Block",
+    "Offer_Availability_Score",
+    "PO_Confirmation_SLA",
+    "PO_Fill_Rate",
+    "Perfect_Inbound_Rate",
+    "Chargebacks_Cost",
+    "ASN_Accuracy_Rate",
+    "Lead_Time_Days",
+    "Late_Shipment_Rate",
+    "Appointment_No_Show_Rate",
+    "Prep_Defect_Rate",
+    "Vendor_Operational_Score",
+
+    # Forecast / Meta
+    "Forecast_Accuracy",
+    "Forecast_Bias",
+    "Confidence_Interval_Width",
+    "Reliability_Score",
 ]
 
 metric_variants: Dict[str, Sequence[str]] = {
+    # Demand / Traffic
+    "GV": [
+        "GV",
+        "Glance Views",
+        "Total Glance Views",
+        "Detail Page Views",
+        "DPV",
+    ],
+    "Amzn_GV": [
+        "Amzn GV",
+        "Amazon GV",
+        "Amazon Retail Glance Views",
+        "GV when Amazon wins",
+        "Amazon FO GV",
+    ],
+    "Page_Views": ["Page Views", "DP Views", "Detail Page Views"],
+    "Sessions": ["Sessions", "User Sessions"],
+    "Unique_Sessions": ["Unique Sessions", "Unique Visitors"],
+    "Conversion_Rate": ["Conversion Rate", "CR", "Conv %"],
+    "Add_To_Cart_Rate": ["Add to Cart Rate", "ATC Rate", "Add-To-Cart %"],
+    "Traffic_Share": ["Traffic Share", "Category Traffic Share"],
+    "Traffic_Index": ["Traffic Index", "TI Score"],
+    "Organic_Traffic_Share": ["Organic Traffic Share", "Organic GV %"],
+    "Sponsored_Traffic_Share": ["Sponsored Traffic Share", "Ad GV %"],
+    "Search_Impressions": ["Search Impressions", "Impressions"],
+    "Search_Conversion_Rate": ["Search Conversion Rate", "Search CR"],
+    "Page_View_Growth_WoW": ["PV Growth WoW", "Page Views WoW"],
+    "Traffic_Growth_WoW": ["Traffic Growth WoW", "GV WoW"],
+    "Bounce_Rate": ["Bounce Rate", "Page Bounce %"],
+    "Dwell_Time": ["Dwell Time", "Time on Page"],
+    "Engagement_Index": ["Engagement Index", "Engagement Score"],
+    "Multi_Buy_Conversion": ["Multi Buy Conversion", "Multi-unit Conversion"],
+    "Detail_Page_Views_Mobile": ["Mobile DPV", "Mobile Page Views"],
+    "Detail_Page_Views_Desktop": ["Desktop DPV", "Desktop Page Views"],
+    "Subscribe_And_Save_Views": ["Subscribe & Save Views", "SNS GV"],
+    "Traffic_Seasonality_Index": ["Traffic Seasonality Index", "Seasonality Index"],
+    "Traffic_Share_Category_Top10": ["Top Traffic Share", "Traffic Rank Top 10"],
+    "ASIN_Unique_Visitor_Count": ["Unique Visitors", "UV Count"],
+
+    # Sales
+    "Net_Ordered_GMS": ["Net Ordered GMS($)", "Net Ordered GMS"],
+    "Net_Ordered_Units": ["Net Ordered Units", "Ordered Units Net"],
+    "Product_GMS": ["Product GMS($)", "Product GMS"],
+    "Deal_GMS": ["Deal GMS($)", "Deal GMS", "Promo GMS"],
+    "Shipped_Revenue": ["Shipped Revenue", "Shipped Sales"],
+    "Ordered_Revenue": ["Ordered Revenue", "Order Revenue"],
     "ASP": ["ASP", "avg selling price", "average selling price"],
-    "Amzn_GV": ["Amzn GV", "Amazon GV", "AB GV", "Amazon Business Glance Views"],
+    "Discounted_ASP": ["Discounted ASP", "Discounted Price"],
+    "Promo_Units": ["Promo Units", "Deal Units"],
+    "New_ASIN_Sales": ["New ASIN Sales", "Launch Sales"],
+    "Returning_Customer_Sales": ["Returning Customer Sales", "Repeat Buyer Sales"],
+    "Sales_Per_Visit": ["Sales per Visit", "Sales per Session"],
+    "GMS_Growth_WoW": ["GMS Growth WoW", "Sales Growth WoW"],
+    "Units_Growth_WoW": ["Units Growth WoW", "Ordered Units WoW"],
+    "Orders_Per_1000_GV": ["Orders per 1000 GV", "Orders per GV"],
+    "Basket_Size": ["Basket Size", "Units per Order"],
+    "Shipped_Unit_Growth": ["Shipped Unit Growth", "Shipped Units WoW"],
+    "Subscription_Sales_GMS": ["Subscription Sales GMS", "SNS GMS"],
+    "First_Time_Buyer_Sales": ["First Time Buyer Sales", "FTB Sales"],
+    "Marketplace_Share": ["Marketplace Share", "Retail Share"],
+    "Sales_Volatility_Index": ["Sales Volatility Index", "Sales Variability"],
+    "Average_Order_Value": ["Average Order Value", "AOV"],
+    "Purchased_By_Business_Customer": ["Business Customer Sales", "AB Sales"],
+    "Net_Shipped_Units": ["Net Shipped Units", "Shipped Units Net"],
+    "Growth_Contribution_Index": ["Growth Contribution Index", "Growth Contribution"],
+
+    # Pricing / Buy Box
+    "Featured_Offer_Percentage": [
+        "Featured Offer %",
+        "FO%",
+        "Featured Offer Percentage",
+    ],
+    "Buy_Box_Win_Rate": ["Buy Box Win Rate", "Buy Box %", "BB%"],
+    "Pricing_Competitiveness_Index": ["Pricing Competitiveness Index", "PCI"],
+    "MAP_Violation_Flag": ["MAP Violation", "MAP Breach"],
+    "External_Match_Revenue": ["External Match Revenue", "Competitor Match Revenue"],
+    "Price_Drop_Pct": ["Price Drop %", "Price Decrease %"],
+    "Historical_Price_Index": ["Historical Price Index", "Price Trend Index"],
+    "Discount_Depth": ["Discount Depth", "Promo Depth"],
+    "Promo_Frequency": ["Promo Frequency", "Promotion Frequency"],
+    "Buy_Box_Lost_To_3P": ["Buy Box Lost to 3P", "Lost BB to 3P"],
+    "Price_Revenue_Impact": ["Price Revenue Impact", "Price Impact"],
+    "Price_Elasticity_Proxy": ["Price Elasticity Proxy", "Elasticity Proxy"],
+    "List_Price": ["List Price", "MSRP List"],
+    "MSRP": ["MSRP", "Suggested Retail Price"],
+    "Price_Parity_Violation": ["Price Parity Violation", "Parity Breach"],
+    "Sale_Price": ["Sale Price", "Promo Price"],
+    "Offer_Price_Index": ["Offer Price Index", "Offer Price Score"],
+    "Buy_Box_Interaction_Rate": ["Buy Box Interaction Rate", "BB Interaction"],
+
+    # Profitability
+    "CP": ["CP($)", "CP", "Contribution Profit", "CP USD"],
+    "CPPU": ["CPPU", "Contribution Profit Per Unit", "profit per unit"],
+    "CM": ["CM", "Contribution Margin", "contribution_margin"],
+    "PPM": ["PPM", "Procurement Profit Margin"],
+    "Net_PPM": ["Net PPM", "Net Pure Profit Margin"],
+    "PCOGS": ["PCOGS($)", "PCOGS", "Procurement COGS"],
     "CCOGS_As_A_Percent_Of_Revenue": [
         "CCOGS As A % Of Revenue",
         "CCOGS % Revenue",
         "Contra COGS % of revenue",
         "CCOGS%Revenue",
     ],
-    "CM": ["CM", "Contribution Margin", "contribution_margin"],
-    "CP": ["CP($)", "CP", "Contribution Profit", "CP USD"],
-    "CPPU": ["CPPU", "Contribution Profit Per Unit", "profit per unit"],
+    "Gross_Margin_Rate": ["Gross Margin Rate", "GM%"],
+    "Net_Margin_Rate": ["Net Margin Rate", "Net Margin %"],
+    "Contra_Uplift_Amount": ["Contra Uplift Amount", "Contra Uplift"],
+    "Contra_Uplift_Rate": ["Contra Uplift Rate", "Contra % Uplift"],
+    "Contra_Agreement_Count": ["Contra Agreement Count", "Agreement Count"],
+    "Contra_Expiring_Soon": ["Contra Expiring Soon", "Expiring Agreement Flag"],
+    "Margin_Drop_Risk": ["Margin Drop Risk", "Profit Risk Score"],
+    "Profit_Stability_Index": ["Profit Stability Index", "Margin Stability"],
+    "Vendor_Funding_Reliance": ["Vendor Funding Reliance", "Contra Reliance"],
+    "Promo_Margin_Impact": ["Promo Margin Impact", "Promotion Margin Impact"],
+    "Shipping_Cost_Per_Unit": ["Shipping Cost per Unit", "Fulfillment Cost per Unit"],
+    "Cost_Increase_Flag": ["Cost Increase Flag", "COGS Increase Flag"],
+    "Margin_Recovery_Index": ["Margin Recovery Index", "Recovery Index"],
+
+    # Quality / Returns
     "Customer_Returns": ["Customer Returns($)", "Customer Returns", "Returns ($)"],
-    "Deal_GMS": ["Deal GMS($)", "Deal GMS", "Promo GMS"],
-    "Fill_Rate_Sourceable": [
-        "Fill Rate - Sourceable",
-        "Fill_Rate_Sourceable",
-        "Sourceable Fill Rate",
-    ],
-    "GV": ["GV", "Glance Views", "Glance View", "Detail Page Views"],
-    "Net_Ordered_GMS": [
-        "Net Ordered GMS($)",
-        "Net Ordered GMS",
-        "Net Ordered Gross Merchandise Sales",
-    ],
-    "Net_Ordered_Units": ["Net Ordered Units", "Ordered Units Net", "net_ordered_units"],
-    "Net_PPM": ["Net PPM", "Net Pure Profit Margin"],
-    "Net_Shipped_Units": ["Net Shipped Units", "Shipped Units", "net_shipped_units"],
+    "Return_Rate": ["Return Rate", "Return %"],
+    "Refund_Rate": ["Refund Rate", "Refund %"],
+    "Damage_Rate": ["Damage Rate", "Damaged Returns %"],
+    "Quality_Defect_Rate": ["Quality Defect Rate", "QDR"],
+    "Negative_Contact_Rate": ["Negative Contact Rate", "NCR"],
+    "Returns_Unit_Ratio": ["Returns Unit Ratio", "Units Returned %"],
+    "Returns_GMS_Impact": ["Returns GMS Impact", "Returned GMS"],
+    "Replacement_Unit_Rate": ["Replacement Unit Rate", "Replacement %"],
+    "Quality_Score": ["Quality Score", "QScore"],
+    "Late_Return_Ratio": ["Late Return Ratio", "Late Returns %"],
+    "Customer_Dissatisfaction_Index": ["Customer Dissatisfaction Index", "CDI"],
+
+    # Inventory
     "On_Hand_Inventory_Units_Sellable": [
         "On-Hand Inventory Units (Sellable)",
-        "Sellable On Hand Units",
         "On Hand Inventory Units Sellable",
     ],
-    "PCOGS": ["PCOGS($)", "PCOGS", "Procurement COGS"],
-    "PPM": ["PPM", "Procurement Profit Margin"],
-    "Product_GMS": ["Product GMS($)", "Product GMS"],
-    "SoROOS": ["SoROOS(%)", "SoROOS", "Sourceable Replenishment Out of Stock"],
     "Total_Inventory_Units": ["Total Inventory Units", "Inventory Units Total"],
+    "Reserved_Units": ["Reserved Units", "Reserved Inventory"],
+    "AFN_Inventory_Units": ["AFN Inventory Units", "FBA Inventory Units"],
+    "MFN_Inventory_Units": ["MFN Inventory Units", "FBM Inventory Units"],
+    "FC_Sellable_Units": ["FC Sellable Units", "Fulfillment Center Sellable Units"],
+    "FC_Reserved_Units": ["FC Reserved Units", "Fulfillment Center Reserved Units"],
+    "FC_Count": ["FC Count", "Fulfillment Center Count"],
+    "Demand_Coverage_Days": ["Demand Coverage Days", "Days of Cover"],
+    "HCPO_Present": ["HCPO Present", "High Capacity PO Present"],
+    "LCPO_Only": ["LCPO Only", "Low Capacity POs Only"],
+    "Node_Inventory_Imbalance": ["Node Inventory Imbalance", "Inventory Imbalance"],
+    "Inventory_Risk_Flag": ["Inventory Risk Flag", "Inventory Risk"],
+    "Overstock_Flag": ["Overstock Flag", "Excess Inventory Flag"],
+    "OOS_Risk_Probability": ["OOS Risk Probability", "Stockout Risk"],
+    "Inventory_Health_Score": ["Inventory Health Score", "Inventory Health"],
+    "Excess_Rate": ["Excess Rate", "Excess Inventory %"],
+    "Aging_Inventory_Units": ["Aging Inventory Units", "Aged Inventory Units"],
+    "Net_Receipts_Units": ["Net Receipts Units", "Inbound Units"],
+    "Sellable_Stock_Ratio": ["Sellable Stock Ratio", "Sellable %"],
+    "Safety_Stock_Level": ["Safety Stock Level", "Safety Stock"],
+    "Unfulfillable_Units": ["Unfulfillable Units", "Unsellable Units"],
+    "Inbound_Transit_Units": ["Inbound Transit Units", "Transit Units"],
+    "Lost_Units_Flag": ["Lost Units Flag", "Lost Inventory Flag"],
+    "Net_Inventory_Value": ["Net Inventory Value", "Inventory Value"],
+
+    # Availability / Operations
+    "SoROOS": ["SoROOS(%)", "SoROOS", "Sourceable Replenishment Out of Stock"],
+    "Fill_Rate_Sourceable": [
+        "Fill Rate - Sourceable",
+        "Fill Rate Sourceable",
+        "Sourceable Fill Rate",
+    ],
     "Vendor_Confirmation_Rate_Sourceable": [
         "Vendor Confirmation Rate - Sourceable",
         "Vendor Confirmation Rate",
         "VCR Sourceable",
     ],
+    "Buyability_Flag": ["Buyability Flag", "Is Buyable"],
+    "Listing_Blocked": ["Listing Blocked", "Blocked Listing"],
+    "Suppressed_From_Website": ["Suppressed From Website", "Suppressed"],
+    "No_Retail_Offer": ["No Retail Offer", "Retail Offer Missing"],
+    "No_Inventory_Offer": ["No Inventory Offer", "No Inventory Available"],
+    "Compliance_Block_Flag": ["Compliance Block Flag", "Compliance Block"],
+    "Hazmat_Block": ["Hazmat Block", "Hazardous Materials Block"],
+    "Offer_Availability_Score": ["Offer Availability Score", "Availability Score"],
+    "PO_Confirmation_SLA": ["PO Confirmation SLA", "PO SLA"],
+    "PO_Fill_Rate": ["PO Fill Rate", "Purchase Order Fill Rate"],
+    "Perfect_Inbound_Rate": ["Perfect Inbound Rate", "Perfect Inbound"],
+    "Chargebacks_Cost": ["Chargebacks Cost", "Chargeback Cost"],
+    "ASN_Accuracy_Rate": ["ASN Accuracy Rate", "ASN Accuracy"],
+    "Lead_Time_Days": ["Lead Time Days", "Lead Time"],
+    "Late_Shipment_Rate": ["Late Shipment Rate", "Late Shipments %"],
+    "Appointment_No_Show_Rate": ["Appointment No Show Rate", "Dock No Show %"],
+    "Prep_Defect_Rate": ["Prep Defect Rate", "Inbound Prep Defects"],
+    "Vendor_Operational_Score": ["Vendor Operational Score", "Vendor Ops Score"],
+
+    # Forecast / Meta
+    "Forecast_Accuracy": ["Forecast Accuracy", "MAPE"],
+    "Forecast_Bias": ["Forecast Bias", "Bias %"],
+    "Confidence_Interval_Width": ["Confidence Interval Width", "Forecast Uncertainty"],
+    "Reliability_Score": ["Reliability Score", "Metric Reliability"],
 }
 
 metric_descriptions: Dict[str, str] = {
-    "ASP": (
-        "Average selling price per shipped unit; shipped revenue divided by shipped units, "
-        "used to track pricing strategy and portfolio value."
-    ),
-    "Amzn_GV": (
-        "Amazon Business glance views; number of product detail page views from business "
-        "customers, indicating B2B traffic, visibility and interest."
-    ),
-    "CCOGS_As_A_Percent_Of_Revenue": (
-        "Share of customer revenue consumed by COGS and contra-COGS trade terms, showing "
-        "how investments and discounts compress gross margin."
-    ),
-    "CM": (
-        "Contribution margin percentage after shipping costs and trade terms, used by "
-        "Amazon to assess vendor and product profitability versus targets."
-    ),
-    "CP": (
-        "Contribution profit in absolute currency; contribution margin applied to shipped "
-        "revenue, representing profit pool after direct costs and terms."
-    ),
-    "CPPU": (
-        "Contribution profit per unit; contribution profit divided by shipped units, "
-        "highlighting per-unit profitability versus price, costs and vendor funding."
-    ),
-    "Customer_Returns": (
-        "Currency value of customer returns and refunds for shipped units, reducing net "
-        "revenue and impacting sell-through and profitability diagnostics."
-    ),
-    "Deal_GMS": (
-        "Gross merchandise sales revenue generated while products run on deals or "
-        "promotions, capturing incremental uplift from temporary discounts."
-    ),
-    "Fill_Rate_Sourceable": (
-        "Percentage of confirmed, sourceable purchase-order units actually received by "
-        "Amazon, indicating vendor supply reliability for replenishable items."
-    ),
-    "GV": (
-        "Glance views; number of times a product detail page is viewed when Amazon "
-        "Retail is featured offer, measuring customer traffic."
-    ),
-    "Net_Ordered_GMS": (
-        "Customer-ordered merchandise sales after cancellations, promotions and "
-        "discounts, representing cleaned ordered revenue value for the selected period."
-    ),
-    "Net_Ordered_Units": (
-        "Number of customer-ordered units net of cancellations, used with glance "
-        "views to calculate conversion and understand demand."
-    ),
-    "Net_PPM": (
-        "Net pure profit margin; Amazon’s retail margin after COGS, contra-COGS and "
-        "discounts relative to shipped revenue, key negotiation metric."
-    ),
-    "Net_Shipped_Units": (
-        "Units actually shipped to customers in the period, excluding cancellations, "
-        "often used as demand proxy and for sell-through calculations."
-    ),
-    "On_Hand_Inventory_Units_Sellable": (
-        "Quantity of sellable on-hand inventory units in Amazon fulfillment centers, "
-        "excluding damaged or unsellable stock states."
-    ),
-    "PCOGS": (
-        "Procurement cost of goods sold; Amazon’s effective cost for received units "
-        "after vendor terms, used in PPM and Net PPM."
-    ),
-    "PPM": (
-        "Procurement profit margin based on PCOGS and revenue before some contra-COGS "
-        "adjustments; complements Net PPM in profitability analysis."
-    ),
-    "Product_GMS": (
-        "Gross merchandise sales for specific products or ASINs, measuring shipped or "
-        "ordered sales revenue before returns and allowances."
-    ),
-    "SoROOS": (
-        "Sourceable replenishment out of stock; percentage of detail-page views where "
-        "the item appears out of stock but still sourceable."
-    ),
-    "Total_Inventory_Units": (
-        "Total units of inventory held by Amazon across sellable and unsellable "
-        "statuses, summarizing overall stock exposure and risk."
-    ),
-    "Vendor_Confirmation_Rate_Sourceable": (
-        "Percentage of Amazon purchase-order units the vendor confirms for sourceable "
-        "ASINs, indicating supply capacity and willingness to meet demand."
-    ),
+    # Demand / Traffic
+    "GV": "Total detail page views for the ASIN from all offers.",
+    "Amzn_GV": "Detail page views when Amazon Retail wins the Featured Offer.",
+    "Page_Views": "Total detail page views, including all offers and sessions.",
+    "Sessions": "Distinct customer browsing sessions landing on the product detail page.",
+    "Unique_Sessions": "Unique visitors generating sessions on this product detail page.",
+    "Conversion_Rate": "Percentage of sessions that result in a placed customer order.",
+    "Add_To_Cart_Rate": "Rate at which page views lead to add-to-cart actions.",
+    "Traffic_Share": "Share of total category traffic captured by this ASIN.",
+    "Traffic_Index": "Normalized traffic performance versus category peers and benchmarks.",
+    "Organic_Traffic_Share": "Proportion of traffic originating from organic, non-sponsored placements.",
+    "Sponsored_Traffic_Share": "Proportion of traffic originating from paid advertising impressions.",
+    "Search_Impressions": "Count of times the product appears in search result lists.",
+    "Search_Conversion_Rate": "Conversion rate for sessions originating from search impressions.",
+    "Page_View_Growth_WoW": "Week-over-week growth rate in total detail page views.",
+    "Traffic_Growth_WoW": "Week-over-week growth rate in traffic-related metrics like GV.",
+    "Bounce_Rate": "Share of visits exiting quickly without meaningful interaction or scroll.",
+    "Dwell_Time": "Average time customers spend actively viewing the detail page.",
+    "Engagement_Index": "Composite index of customer engagement across time, scroll, and clicks.",
+    "Multi_Buy_Conversion": "Rate at which orders contain multiple units per customer.",
+    "Detail_Page_Views_Mobile": "Detail page views from mobile devices only for this ASIN.",
+    "Detail_Page_Views_Desktop": "Detail page views from desktop devices only for this ASIN.",
+    "Subscribe_And_Save_Views": "Detail page views from customers considering subscribe-and-save offers.",
+    "Traffic_Seasonality_Index": "Index capturing expected seasonal uplift versus historical baselines.",
+    "Traffic_Share_Category_Top10": "Indicator whether ASIN ranks among top category traffic shares.",
+    "ASIN_Unique_Visitor_Count": "Number of distinct visitors viewing the ASIN during the period.",
+
+    # Sales
+    "Net_Ordered_GMS": "Ordered revenue net of cancellations, fraud, and certain adjustments.",
+    "Net_Ordered_Units": "Units ordered net of cancellations and invalid orders.",
+    "Product_GMS": "Gross merchandise sales attributed directly to the product.",
+    "Deal_GMS": "Gross merchandise sales generated under deals and promotions.",
+    "Shipped_Revenue": "Revenue realized from units that have shipped to customers.",
+    "Ordered_Revenue": "Topline revenue based on all orders placed in period.",
+    "ASP": "Average selling price per shipped unit across the selected period.",
+    "Discounted_ASP": "Average selling price after all discounts and promotions applied.",
+    "Promo_Units": "Units sold under active deals, discounts, or promotional campaigns.",
+    "New_ASIN_Sales": "Sales generated by newly launched SKUs within defined launch window.",
+    "Returning_Customer_Sales": "Sales generated by customers purchasing the item repeatedly.",
+    "Sales_Per_Visit": "Revenue generated per visit or session on the product page.",
+    "GMS_Growth_WoW": "Week-over-week growth of gross merchandise sales for the ASIN.",
+    "Units_Growth_WoW": "Week-over-week change in the number of ordered units.",
+    "Orders_Per_1000_GV": "Orders generated per thousand glance views, a conversion efficiency measure.",
+    "Basket_Size": "Average units per order containing this ASIN across all orders.",
+    "Shipped_Unit_Growth": "Growth trend of shipped units versus the previous comparable week.",
+    "Subscription_Sales_GMS": "Gross merchandise sales from subscribe-and-save transactions only.",
+    "First_Time_Buyer_Sales": "Sales attributable to first-time buyers of this ASIN.",
+    "Marketplace_Share": "Share of total category revenue captured by Amazon Retail.",
+    "Sales_Volatility_Index": "Index measuring variability and instability of weekly sales.",
+    "Average_Order_Value": "Average monetary value of orders that include this ASIN.",
+    "Purchased_By_Business_Customer": "Sales generated by Amazon Business (B2B) customers specifically.",
+    "Net_Shipped_Units": "Shipped units net of cancellations, rejections, and shipment failures.",
+    "Growth_Contribution_Index": "Weighted contribution of this ASIN to overall vendor growth.",
+
+    # Pricing / Buy Box
+    "Featured_Offer_Percentage": "Share of time Amazon Retail controls the Featured Offer position.",
+    "Buy_Box_Win_Rate": "Rate at which Amazon wins the Buy Box across sessions.",
+    "Pricing_Competitiveness_Index": "Relative competitiveness of price versus external competitors and peers.",
+    "MAP_Violation_Flag": "Flag indicating potential violations of minimum advertised price policies.",
+    "External_Match_Revenue": "Revenue linked to external price-matching activities or price guarantees.",
+    "Price_Drop_Pct": "Percentage decrease of ASP compared to a defined baseline period.",
+    "Historical_Price_Index": "Index comparing current price level versus historical pricing behavior.",
+    "Discount_Depth": "Depth of discount versus list price for promotions or markdowns.",
+    "Promo_Frequency": "Frequency of promotional events run for the ASIN during period.",
+    "Buy_Box_Lost_To_3P": "Share of sessions where Buy Box is won by third-party sellers.",
+    "Price_Revenue_Impact": "Estimated revenue impact attributable purely to price changes.",
+    "Price_Elasticity_Proxy": "Proxy metric estimating demand sensitivity to price changes.",
+    "List_Price": "Vendor-provided list or MSRP price for the item.",
+    "MSRP": "Manufacturer suggested retail price used as a key benchmark.",
+    "Price_Parity_Violation": "Indicator of price inconsistency across markets, merchants, or channels.",
+    "Sale_Price": "Promotional sale price offered during discount events or deals.",
+    "Offer_Price_Index": "Index summarizing competitiveness of current selling price versus peers.",
+    "Buy_Box_Interaction_Rate": "Rate at which customers interact with the Buy Box placement.",
+
+    # Profitability
+    "CP": "Absolute contribution profit after COGS, shipping, and trade terms.",
+    "CPPU": "Contribution profit earned per unit sold or shipped.",
+    "CM": "Contribution margin percentage after shipping and trade terms.",
+    "PPM": "Procurement profit margin before contra COGS adjustments.",
+    "Net_PPM": "Profit margin after incorporating contra COGS and funding.",
+    "PCOGS": "Procurement cost of goods sold paid to the vendor.",
+    "CCOGS_As_A_Percent_Of_Revenue": "Share of revenue consumed by COGS and contra trade terms.",
+    "Gross_Margin_Rate": "Gross margin percentage before shipping and contra adjustments.",
+    "Net_Margin_Rate": "Net margin percentage after all relevant costs applied.",
+    "Contra_Uplift_Amount": "Absolute margin uplift contributed by contra funding agreements.",
+    "Contra_Uplift_Rate": "Percentage margin uplift attributable to contra relative to revenue.",
+    "Contra_Agreement_Count": "Number of active contra agreements supporting this ASIN or vendor.",
+    "Contra_Expiring_Soon": "Flag for contra agreements expiring within the near-term window.",
+    "Margin_Drop_Risk": "Risk score for upcoming or potential drop in profitability.",
+    "Profit_Stability_Index": "Index quantifying stability and volatility of margin over time.",
+    "Vendor_Funding_Reliance": "Degree of dependence on vendor funding to sustain profitability.",
+    "Promo_Margin_Impact": "Margin impact caused by promotions and temporary discounts.",
+    "Shipping_Cost_Per_Unit": "Average shipping or fulfillment cost per unit shipped.",
+    "Cost_Increase_Flag": "Flag indicating recent increases in procurement cost levels.",
+    "Margin_Recovery_Index": "Index capturing margin recovery after prior degradation.",
+
+    # Quality / Returns
+    "Customer_Returns": "Monetary value of customer-initiated returns during the period.",
+    "Return_Rate": "Percentage of shipped units that customers ultimately return.",
+    "Refund_Rate": "Percentage of orders or revenue refunded to customers.",
+    "Damage_Rate": "Percentage of units returned due to damage or defects.",
+    "Quality_Defect_Rate": "Rate of returns or issues related to product quality defects.",
+    "Negative_Contact_Rate": "Rate of negative customer contacts relative to customer base.",
+    "Returns_Unit_Ratio": "Ratio of returned units to total shipped units.",
+    "Returns_GMS_Impact": "Revenue reduction caused by returned or refunded merchandise.",
+    "Replacement_Unit_Rate": "Percentage of units replaced following returns or issues.",
+    "Quality_Score": "Composite index summarizing product quality performance and issues.",
+    "Late_Return_Ratio": "Share of returns arriving outside the allowed return window.",
+    "Customer_Dissatisfaction_Index": "Composite dissatisfaction score from returns, feedback, and CS contacts.",
+
+    # Inventory
+    "On_Hand_Inventory_Units_Sellable": "Sellable inventory units currently on hand and available to sell.",
+    "Total_Inventory_Units": "Total units across sellable, reserved, and unsellable statuses.",
+    "Reserved_Units": "Units reserved for pending orders or warehouse processing.",
+    "AFN_Inventory_Units": "Inventory units stored within Amazon’s fulfillment network.",
+    "MFN_Inventory_Units": "Inventory units stored and fulfilled directly by merchant.",
+    "FC_Sellable_Units": "Sellable units held at fulfillment centers across the network.",
+    "FC_Reserved_Units": "Reserved units at fulfillment centers pending operations.",
+    "FC_Count": "Number of fulfillment centers holding inventory for this ASIN.",
+    "Demand_Coverage_Days": "Estimated days of demand covered by existing inventory.",
+    "HCPO_Present": "Flag indicating presence of high-capacity purchase orders.",
+    "LCPO_Only": "Flag indicating only low-capacity purchase orders exist.",
+    "Node_Inventory_Imbalance": "Index of imbalance across nodes or fulfillment locations.",
+    "Inventory_Risk_Flag": "Flag for elevated risk of stockout or overstock.",
+    "Overstock_Flag": "Flag indicating inventory levels materially exceed expected demand.",
+    "OOS_Risk_Probability": "Estimated probability of going out of stock soon.",
+    "Inventory_Health_Score": "Composite score of inventory balance, coverage, and risk.",
+    "Excess_Rate": "Percentage of inventory classified as excess versus forecast.",
+    "Aging_Inventory_Units": "Units held beyond acceptable or targeted aging thresholds.",
+    "Net_Receipts_Units": "Units received into fulfillment centers during the period.",
+    "Sellable_Stock_Ratio": "Share of inventory that is usable and sellable.",
+    "Safety_Stock_Level": "Minimum stock target to buffer against demand variability.",
+    "Unfulfillable_Units": "Units that are damaged, defective, or otherwise unsellable.",
+    "Inbound_Transit_Units": "Units shipped to FC but not yet available to sell.",
+    "Lost_Units_Flag": "Flag indicating inventory units lost in operations.",
+    "Net_Inventory_Value": "Value of inventory calculated using procurement cost basis.",
+
+    # Availability / Operations
+    "SoROOS": "Share of detail-page views where item is out-of-stock but sourceable.",
+    "Fill_Rate_Sourceable": "Fill rate for purchase orders on sourceable ASINs.",
+    "Vendor_Confirmation_Rate_Sourceable": "Vendor confirmation rate for sourceable purchase-order units.",
+    "Buyability_Flag": "Indicator whether the ASIN is currently buyable on site.",
+    "Listing_Blocked": "Flag for listings blocked due to catalog or other issues.",
+    "Suppressed_From_Website": "Flag indicating the item is suppressed from the website.",
+    "No_Retail_Offer": "No Amazon Retail offer available for this ASIN.",
+    "No_Inventory_Offer": "No offer because there is no sellable inventory available.",
+    "Compliance_Block_Flag": "Flag indicating listing blocked for compliance or regulatory reasons.",
+    "Hazmat_Block": "Flag indicating listing blocked due to hazardous materials classification.",
+    "Offer_Availability_Score": "Composite score summarizing offer and buyability availability.",
+    "PO_Confirmation_SLA": "Percentage of POs confirmed within defined SLA time window.",
+    "PO_Fill_Rate": "Percentage of PO units that vendor actually fulfills and ships.",
+    "Perfect_Inbound_Rate": "Share of inbound shipments with no defects or variances.",
+    "Chargebacks_Cost": "Cost incurred from operational or compliance-related chargebacks.",
+    "ASN_Accuracy_Rate": "Accuracy rate of advance shipment notices for inbound shipments.",
+    "Lead_Time_Days": "Average days from PO placement to inventory receipt.",
+    "Late_Shipment_Rate": "Percentage of shipments arriving after agreed delivery window.",
+    "Appointment_No_Show_Rate": "Share of missed inbound dock appointments by the vendor.",
+    "Prep_Defect_Rate": "Rate of prep-related issues requiring rework or chargebacks.",
+    "Vendor_Operational_Score": "Composite score of vendor logistics and operational performance.",
+
+    # Forecast / Meta
+    "Forecast_Accuracy": "Accuracy of forecasted demand versus actual realized demand.",
+    "Forecast_Bias": "Systematic over- or under-forecasting tendency across periods.",
+    "Confidence_Interval_Width": "Width of forecast confidence interval, representing uncertainty.",
+    "Reliability_Score": "Overall metric readiness, data quality, and completeness score.",
 }
-
-
-def normalize_metric_key(raw: str) -> str:
-    """Normalize raw metric text into a safe comparison token.
-
-    - Lowercase
-    - Remove $, %, (, )
-    - Replace hyphens with space
-    - Remove apostrophes
-    - Replace spaces with underscores
-    - Collapse repeated underscores
-    """
-    import re
-
-    if raw is None:
-        return ""
-    s = str(raw).strip().lower()
-    s = re.sub(r"[\$%\(\)]", "", s)
-    s = s.replace("-", " ")
-    s = s.replace("'", "")
-    s = s.replace(" ", "_")
-    s = re.sub(r"_+", "_", s)
-    return s.strip("_")
-
-
-def match_to_canonical(raw_metric: str, variant_map: Dict[str, Sequence[str]]) -> Optional[str]:
-    """Match an ingested metric header to a canonical registry key.
-
-    Returns the canonical name or ``None`` if no match is found.
-    """
-    norm = normalize_metric_key(raw_metric)
-    if not norm:
-        return None
-    for canonical, variants in (variant_map or {}).items():
-        all_candidates = [canonical] + list(variants)
-        for candidate in all_candidates:
-            if norm == normalize_metric_key(candidate):
-                return canonical
-    return None
-
-
-def bootstrap_predefined_metrics(registry_df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure all canonical metrics exist in the registry with descriptions.
-
-    Adds rows for any missing canonical metric.
-    Expected columns: metric_name, display_name, unit, direction,
-                      category, forecastable, description, keywords
-    """
-    df = registry_df.copy() if isinstance(registry_df, pd.DataFrame) else pd.DataFrame()
-    # Ensure required columns exist
-    for col in REGISTRY_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-
-    existing = set(map(str, df.get("metric_name", pd.Series(dtype=object)).dropna().unique().tolist()))
-    to_add = [m for m in canonical_metrics if m not in existing]
-    rows = []
-    for canonical in to_add:
-        desc = metric_descriptions.get(canonical, "")
-        display = canonical.replace("_", " ")
-        rows.append(
-            {
-                "metric_name": canonical,
-                "display_name": display,
-                "unit": "",
-                "direction": "",
-                "category": "",
-                "forecastable": "",
-                "description": desc,
-                "keywords": desc.lower(),
-            }
-        )
-    if rows:
-        df = pd.concat([df, pd.DataFrame(rows)[REGISTRY_COLUMNS]], ignore_index=True)
-    # Drop exact duplicates on metric_name
-    if "metric_name" in df.columns:
-        df = df.drop_duplicates(subset=["metric_name"], keep="first")
-    return df[REGISTRY_COLUMNS].copy()
-
-
-def load_metric_registry(path: Path) -> pd.DataFrame:
-    """Load the metric registry from ``path``.
-
-    Behavior:
-    - If the file exists, load it as a DataFrame (supports CSV/Parquet by extension).
-    - If the file is missing or unreadable, return an empty DataFrame with the
-      canonical registry columns.
-    - Never raises; always returns a DataFrame.
-    """
-
-    try:
-        if path.exists():
-            if path.suffix.lower() == ".parquet":
-                try:
-                    df = pd.read_parquet(path)
-                except Exception as exc:  # pragma: no cover (engine/env specific)
-                    BRIGHTSTAR_LOGGER.warning(
-                        "Unable to read registry parquet at %s (%s). Falling back to empty registry.",
-                        path,
-                        exc,
-                    )
-                    return pd.DataFrame(columns=REGISTRY_COLUMNS)
-            else:
-                # default to CSV/TSV style reading
-                df = pd.read_csv(path)
-
-            # Normalize columns: ensure required structure even if file has extras/missing
-            for c in REGISTRY_COLUMNS:
-                if c not in df.columns:
-                    df[c] = None
-            # Keep only expected columns in defined order; do not bootstrap here
-            df = df[REGISTRY_COLUMNS].copy()
-            return df
-    except Exception as exc:  # pragma: no cover
-        BRIGHTSTAR_LOGGER.warning(
-            "Error loading metric registry at %s (%s). Returning empty registry.", path, exc
-        )
-
-    # Missing or error → return empty structured DF (no bootstrap; tests expect empty when file missing)
-    return pd.DataFrame(columns=REGISTRY_COLUMNS)
-
-
-def detect_new_metrics(normalized_df: pd.DataFrame, registry_df: pd.DataFrame) -> List[str]:
-    """Detect metrics present in ``normalized_df`` but absent from ``registry_df``.
-
-    Returns a sorted list of unknown metric names.
-    """
-
-    if normalized_df is None or normalized_df.empty or "metric" not in normalized_df.columns:
-        return []
-
-    seen_metrics = set(map(str, normalized_df["metric"].dropna().unique().tolist()))
-    if registry_df is None or registry_df.empty or "metric_name" not in registry_df.columns:
-        registered = set()
-    else:
-        registered = set(map(str, registry_df["metric_name"].dropna().unique().tolist()))
-
-    unknown = sorted(m for m in seen_metrics if m not in registered)
-    return unknown
-
-
-def append_pending_metrics(pending_path: Path, new_metrics: List[str]) -> None:
-    """Append ``new_metrics`` to the pending metrics CSV at ``pending_path``.
-
-    The CSV columns are defined by ``REGISTRY_COLUMNS``. Only the ``metric_name``
-    is populated; all other metadata fields remain empty for manual completion.
-    The function does not overwrite existing content and creates the file if
-    missing. If ``new_metrics`` is empty, no file is created/modified.
-    """
-
-    if not new_metrics:
-        return
-
-    # Ensure directory exists
-    pending_path.parent.mkdir(parents=True, exist_ok=True)
-
-    new_rows = pd.DataFrame({
-        "metric_name": list(map(str, new_metrics)),
-        "display_name": [None] * len(new_metrics),
-        "unit": [None] * len(new_metrics),
-        "direction": [None] * len(new_metrics),
-        "category": [None] * len(new_metrics),
-        "forecastable": [None] * len(new_metrics),
-        "description": [None] * len(new_metrics),
-        "keywords": [None] * len(new_metrics),
-    })[REGISTRY_COLUMNS]
-
-    if pending_path.exists():
-        try:
-            existing = pd.read_csv(pending_path)
-            # Ensure structure
-            for c in REGISTRY_COLUMNS:
-                if c not in existing.columns:
-                    existing[c] = None
-            existing = existing[REGISTRY_COLUMNS]
-            combined = pd.concat([existing, new_rows], ignore_index=True)
-            # Do not deduplicate here to preserve append semantics; duplicates are acceptable.
-            combined.to_csv(pending_path, index=False)
-            return
-        except Exception as exc:  # pragma: no cover
-            BRIGHTSTAR_LOGGER.warning(
-                "Unable to read existing pending metrics at %s (%s). Recreating file.",
-                pending_path,
-                exc,
-            )
-
-    # Create new file
-    new_rows.to_csv(pending_path, index=False)
